@@ -20,6 +20,26 @@ straight back in as targets. Steam search needs `-game <appid>`,
 CurseForge needs `-game <slug>`, mod.io needs a key plus `-game`.
 GameBanana has no public search endpoint so it is skipped.
 
+## Maintaining an archive
+
+    mod-archiver verify [dir ...]      # re-hash files on disk, find corruption
+    mod-archiver check <target ...>    # list new/changed files, download nothing
+    mod-archiver update [target ...]   # re-collect and fetch; no args updates all
+    mod-archiver watch                 # update on a loop, every -interval (30m)
+
+`check` and `update` rely on the manifest hashes. When a source
+republishes a file under the same name with a different digest the
+entry is fetched again instead of being kept stale.
+
+## Dependencies
+
+    mod-archiver -deps <target>        # fetch required dependencies too
+    mod-archiver -deps -deps-depth 3   # how deep the recursion goes
+
+Dependency resolution is supported on Thunderstore, Modrinth and
+CurseForge. Deps are archived as their own targets so each project
+gets its own directory and manifest. Cycles and repeats are skipped.
+
 A target is a site prefix or a full URL:
 
     moddb:funny-project            https://www.moddb.com/mods/funny-project

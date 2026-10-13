@@ -97,7 +97,11 @@ type cfFile struct {
 	DownloadURL string `json:"downloadUrl"`
 	Downloads   int64  `json:"downloadCount"`
 	IsAvailable bool   `json:"isAvailable"`
-	Hashes      []struct {
+	Deps        []struct {
+		ModID    int64 `json:"modId"`
+		Relation int   `json:"relationType"`
+	} `json:"dependencies"`
+	Hashes []struct {
 		Value string `json:"value"`
 		Algo  int    `json:"algo"` // 1 sha1, 2 md5
 	} `json:"hashes"`
@@ -130,6 +134,65 @@ func cfGet[T any](ctx context.Context, c *core.Client, key, path string, out *T)
 	}
 	*out = env.Data
 	return nil
+}
+
+// cfResolveInput turns a cf target into a numeric mod id plus the
+// game segment for building dep refs.
+func cfResolveInput(ctx context.Context, c *core.Client, key, input, gameHint string) (int64, string, error) {
+	var gameSeg, classSeg, modSeg string
+	if strings.HasPrefix(input, "cf:") || strings.HasPrefix(input, "curseforge:") {
+		parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(input, "curseforge:"), "cf:"), ":")
+		if len(parts) == 2 {
+			gameSeg, modSeg = parts[0], parts[1]
+		} else {
+			return 0, "", fmt.Errorf("curseforge: want cf:<game-slug-or-id>:<mod-slug-or-id>")
+		}
+	} else {
+		_, segs := SplitHost(input)
+		if len(segs) >= 3 {
+			gameSeg, classSeg, modSeg = segs[0], segs[1], segs[2]
+		} else if len(segs) == 2 {
+			gameSeg, modSeg = segs[0], segs[1]
+		} else {
+			return 0, "", fmt.Errorf("cannot parse curseforge url %q", input)
+		}
+	}
+	if gameHint != "" && gameSeg == "" {
+		gameSeg = gameHint
+	}
+
+	if n, err := strconv.ParseInt(modSeg, 10, 64); err == nil {
+		return n, gameSeg, nil
+	}
+	// resolve slug -> gameId -> classId -> search -> mod id
+	var gameID int64
+	if g, err := strconv.ParseInt(gameSeg, 10, 64); err == nil {
+		gameID = g
+	} else {
+		var err error
+		gameID, err = cfGameID(ctx, c, key, gameSeg)
+		if err != nil {
+			return 0, "", err
+		}
+	}
+	var classID int64
+	if classSeg != "" {
+		if cid, err := cfClassID(ctx, c, key, gameID, classSeg); err == nil {
+			classID = cid
+		}
+	}
+	q := fmt.Sprintf("/mods/search?gameId=%d&slug=%s", gameID, url2.QueryEscape(modSeg))
+	if classID > 0 {
+		q += fmt.Sprintf("&classId=%d", classID)
+	}
+	var hits []cfMod
+	if err := cfGet(ctx, c, key, q, &hits); err != nil {
+		return 0, "", err
+	}
+	if len(hits) == 0 {
+		return 0, "", fmt.Errorf("curseforge: no mod %q under game %d", modSeg, gameID)
+	}
+	return hits[0].ID, gameSeg, nil
 }
 
 // forgecdnURL builds the deterministic CDN path for a file.
@@ -178,6 +241,35 @@ func (CurseForge) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, er
 	return out, nil
 }
 
+// Dependencies collects required file-level deps into
+// cf:<game>:<modId> refs. relationType 3 means required.
+func (CurseForge) Dependencies(ctx context.Context, cc *CollectCtx) ([]string, error) {
+	key := cc.Opts.CFKey
+	if key == "" {
+		key = cfDefaultKey
+	}
+	modID, gameSeg, err := cfResolveInput(ctx, cc.Client, key, cc.Input, cc.Opts.GameHint)
+	if err != nil {
+		return nil, err
+	}
+	var files []cfFile
+	if err := cfGet(ctx, cc.Client, key, fmt.Sprintf("/mods/%d/files?pageSize=50", modID), &files); err != nil {
+		return nil, err
+	}
+	seen := map[int64]bool{}
+	var out []string
+	for _, f := range files {
+		for _, d := range f.Deps {
+			if d.Relation != 3 || d.ModID == 0 || seen[d.ModID] {
+				continue
+			}
+			seen[d.ModID] = true
+			out = append(out, fmt.Sprintf("cf:%s:%d", gameSeg, d.ModID))
+		}
+	}
+	return out, nil
+}
+
 func (CurseForge) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {
 	key := cc.Opts.CFKey
 	if key == "" {
@@ -188,64 +280,12 @@ func (CurseForge) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, er
 	term := cc.Term
 	m := cc.Manifest
 
-	// resolve input to a mod id
-	var gameSeg, classSeg, modSeg string
-	if strings.HasPrefix(cc.Input, "cf:") || strings.HasPrefix(cc.Input, "curseforge:") {
-		parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(cc.Input, "curseforge:"), "cf:"), ":")
-		if len(parts) == 2 {
-			gameSeg, modSeg = parts[0], parts[1]
-		} else {
-			return nil, fmt.Errorf("curseforge: want cf:<game-slug-or-id>:<mod-slug-or-id>")
-		}
-	} else {
-		_, segs := SplitHost(cc.Input)
-		if len(segs) >= 3 {
-			gameSeg, classSeg, modSeg = segs[0], segs[1], segs[2]
-		} else if len(segs) == 2 {
-			gameSeg, modSeg = segs[0], segs[1]
-		} else {
-			return nil, fmt.Errorf("cannot parse curseforge url %q", cc.Input)
-		}
-	}
-	if cc.Opts.GameHint != "" && gameSeg == "" {
-		gameSeg = cc.Opts.GameHint
+	modID, gameSeg, err := cfResolveInput(ctx, c, key, cc.Input, cc.Opts.GameHint)
+	if err != nil {
+		return nil, err
 	}
 
-	var modID int64
 	var mod cfMod
-	if n, err := strconv.ParseInt(modSeg, 10, 64); err == nil {
-		modID = n
-	} else {
-		// resolve slug -> gameId -> classId -> search -> mod id
-		var gameID int64
-		if g, err := strconv.ParseInt(gameSeg, 10, 64); err == nil {
-			gameID = g
-		} else {
-			gameID, err = cfGameID(ctx, c, key, gameSeg)
-			if err != nil {
-				return nil, err
-			}
-		}
-		var classID int64
-		if classSeg != "" {
-			if cid, err := cfClassID(ctx, c, key, gameID, classSeg); err == nil {
-				classID = cid
-			}
-		}
-		q := fmt.Sprintf("/mods/search?gameId=%d&slug=%s", gameID, url2.QueryEscape(modSeg))
-		if classID > 0 {
-			q += fmt.Sprintf("&classId=%d", classID)
-		}
-		var hits []cfMod
-		if err := cfGet(ctx, c, key, q, &hits); err != nil {
-			return nil, err
-		}
-		if len(hits) == 0 {
-			return nil, fmt.Errorf("curseforge: no mod %q under game %d", modSeg, gameID)
-		}
-		modID = hits[0].ID
-	}
-
 	term.Infof("%s fetching mod %d", term.Bold("curseforge"), modID)
 	if err := cfGet(ctx, c, key, fmt.Sprintf("/mods/%d", modID), &mod); err != nil {
 		return nil, err

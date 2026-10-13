@@ -7,6 +7,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"maps"
 	url2 "net/url"
 	"strings"
 
@@ -57,6 +58,12 @@ type Source interface {
 	Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error)
 }
 
+// DepsSource returns ready-to-archive target refs for a package's
+// declared dependencies. Implemented where the api exposes them.
+type DepsSource interface {
+	Dependencies(ctx context.Context, cc *CollectCtx) ([]string, error)
+}
+
 var sources = []Source{
 	ModDB{},
 	Nexus{},
@@ -105,6 +112,11 @@ func PendingTasks(cc *CollectCtx, mk func(e *core.ItemEntry, destName string) *c
 	seen := map[string]map[string]int{}
 	var tasks []*core.Task
 	for _, e := range cc.Manifest.Items {
+		// remote republished with a different digest, refetch
+		if e.Status == core.StDone && len(e.Hashes) > 0 && len(e.VerifiedHashes) > 0 &&
+			!maps.Equal(e.Hashes, e.VerifiedHashes) {
+			e.Status = core.StPending
+		}
 		if !cc.Manifest.NeedsDownload(e, cc.Dir) {
 			continue
 		}

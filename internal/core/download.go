@@ -128,11 +128,19 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 	// rather than silently kept.
 	if st, err := os.Stat(dest); err == nil && st.Size() > 0 {
 		if t.Size == 0 || st.Size() == t.Size {
-			skip := len(t.Hashes) == 0
-			if !skip {
-				if ok, herr := verifyHashes(dest, t.Hashes); herr == nil && ok {
-					skip = true
+			skip := true
+			switch {
+			case len(t.Hashes) > 0:
+				// remote published digests are authoritative
+				if ok, herr := verifyHashes(dest, t.Hashes); herr != nil || !ok {
+					skip = false
+				} else {
 					res.HashOK = true
+				}
+			case t.Entry != nil && t.Entry.FastHash != "":
+				// no remote digest, fall back to the recorded fast hash
+				if fh, _, ferr := FastHash(dest); ferr != nil || fh != t.Entry.FastHash {
+					skip = false
 				}
 			}
 			if skip {

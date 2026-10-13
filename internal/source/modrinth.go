@@ -89,7 +89,13 @@ type mrVersion struct {
 	DatePublished string   `json:"date_published"`
 	Downloads     int64    `json:"downloads"`
 	Status        string   `json:"status"`
-	Files         []struct {
+	Dependencies  []struct {
+		VersionID string `json:"version_id"`
+		ProjectID string `json:"project_id"`
+		Filename  string `json:"file_name"`
+		DepType   string `json:"dependency_type"`
+	} `json:"dependencies"`
+	Files []struct {
 		Hashes   map[string]string `json:"hashes"`
 		URL      string            `json:"url"`
 		Filename string            `json:"filename"`
@@ -137,6 +143,41 @@ func (Modrinth) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, erro
 			URL:       "https://modrinth.com/" + h.ProjectType + "/" + h.Slug,
 			Summary:   h.Description,
 		})
+	}
+	return out, nil
+}
+
+// Dependencies collects required deps across the versions that match
+// the active version filter. Dep refs use project ids, which the api
+// accepts in place of slugs.
+func (Modrinth) Dependencies(ctx context.Context, cc *CollectCtx) ([]string, error) {
+	id, err := modrinthID(cc.Input)
+	if err != nil {
+		return nil, err
+	}
+	var versions []mrVersion
+	if err := cc.Client.GetJSON(ctx, modrinthAPI+"/project/"+id+"/version?include_changelog=false",
+		"https://modrinth.com/", mrHeaders(), &versions); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range versions {
+		if cc.Opts.VersionFilter != "" &&
+			!strings.Contains(v.VersionNumber, cc.Opts.VersionFilter) &&
+			!strings.Contains(v.Name, cc.Opts.VersionFilter) {
+			continue
+		}
+		for _, d := range v.Dependencies {
+			if d.DepType != "required" || d.ProjectID == "" {
+				continue
+			}
+			if seen[d.ProjectID] {
+				continue
+			}
+			seen[d.ProjectID] = true
+			out = append(out, "modrinth:"+d.ProjectID)
+		}
 	}
 	return out, nil
 }

@@ -143,6 +143,41 @@ func (Thunderstore) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, 
 	return out, nil
 }
 
+// Dependencies returns the latest version's required deps as
+// ts:ns:name refs. The api only exposes the latest version per
+// package so a pinned input still resolves deps against latest.
+func (Thunderstore) Dependencies(ctx context.Context, cc *CollectCtx) ([]string, error) {
+	ns, name, _, err := tsRef(cc.Input)
+	if err != nil {
+		return nil, err
+	}
+	var p tsPackage
+	if err := cc.Client.GetJSON(ctx, tsAPI+"/package/"+ns+"/"+name+"/", "https://thunderstore.io/", nil, &p); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, d := range p.Latest.Dependencies {
+		if ref, ok := tsDepRef(d); ok {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+// tsDepRef turns a "namespace-name-version" dep string into a
+// ts:namespace:name target ref.
+func tsDepRef(dep string) (string, bool) {
+	i := strings.IndexByte(dep, '-')
+	if i < 1 || i+1 >= len(dep) {
+		return "", false
+	}
+	j := strings.LastIndexByte(dep, '-')
+	if j <= i {
+		return "", false
+	}
+	return "ts:" + dep[:i] + ":" + dep[i+1:j], true
+}
+
 func tsCommunity(p tsPackage) string {
 	for _, cl := range p.Listings {
 		return cl.Community

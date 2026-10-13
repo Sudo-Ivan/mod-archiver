@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,7 +41,11 @@ type options struct {
 	ua        string
 	fresh     bool
 	dryRun    bool
+	dryCheck  bool
 	limit     int
+	deps      bool
+	depsDepth int
+	interval  time.Duration
 	color     string
 	quiet     bool
 	verbose   bool
@@ -87,6 +92,9 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, error) {
 	fs.BoolVar(&o.fresh, "fresh", false, "ignore previous manifest, download everything again")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "list what would be downloaded, fetch nothing")
 	fs.IntVar(&o.limit, "limit", 0, "cap number of files downloaded per target (0 = all)")
+	fs.BoolVar(&o.deps, "deps", false, "also archive declared dependencies (thunderstore, modrinth, curseforge)")
+	fs.IntVar(&o.depsDepth, "deps-depth", 2, "how deep -deps recursion goes")
+	fs.DurationVar(&o.interval, "interval", 30*time.Minute, "watch loop pause between update passes")
 	fs.StringVar(&o.color, "color", "auto", "color output: auto, always, never")
 	fs.BoolVar(&o.quiet, "q", false, "only warnings and errors")
 	fs.BoolVar(&o.verbose, "v", false, "verbose debug output")
@@ -112,10 +120,18 @@ usage:
   mod-archiver [flags] <target ...>
   mod-archiver [flags] -list targets.txt
   mod-archiver search <query> [-src x] [-game x] [-limit n]
+  mod-archiver verify [dir ...]
+  mod-archiver check <target ...>
+  mod-archiver update [target ...]     # no targets: every archive under -out
+  mod-archiver watch [-interval 30m]   # update on a loop until Ctrl-C
 
 search hits every reachable source and prints refs you can paste as
 targets. steam needs -game <appid>, curseforge needs -game <slug>,
 mod.io needs a key plus -game. gamebanana has no search api.
+
+verify recomputes hashes on disk, check lists what changed upstream
+without downloading, update re-runs archived targets, watch repeats
+update on -interval.
 
 <target> examples:
   moddb:funny-project               or a moddb.com/mods/... URL
@@ -198,28 +214,100 @@ flags:`)
 	return o, targets, nil
 }
 
-// runSearch queries every searchable source and prints pasteable refs.
-func runSearch(ctx context.Context, client *core.Client, term *core.Term, o *options, sopts *source.Options, words []string) error {
-	var terms []string
+// pickSubFlags pulls flags out of args that came after a subcommand.
+// Go's flag parser stops at the first positional so these never reach
+// the main flagset.
+func pickSubFlags(o *options, sopts *source.Options, words []string) []string {
+	rest := []string{}
+	take := func(i *int) string {
+		*i = *i + 1
+		if *i < len(words) {
+			return words[*i]
+		}
+		return ""
+	}
 	for i := 0; i < len(words); i++ {
-		w := words[i]
-		switch {
-		case (w == "-src" || w == "--src") && i+1 < len(words):
-			o.srcHint = words[i+1]
-			i++
-		case (w == "-game" || w == "--game") && i+1 < len(words):
-			sopts.GameHint = words[i+1]
-			i++
-		case (w == "-limit" || w == "--limit") && i+1 < len(words):
-			if n, err := strconv.Atoi(words[i+1]); err == nil {
+		w := strings.TrimLeft(words[i], "-")
+		name, eq, _ := strings.Cut(w, "=")
+		switch name {
+		case "out", "o":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			o.out = v
+		case "src":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			o.srcHint = v
+		case "game":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			sopts.GameHint = v
+		case "limit":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			if n, err := strconv.Atoi(v); err == nil {
 				o.limit = n
 			}
-			i++
+		case "interval":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			if d, err := time.ParseDuration(v); err == nil {
+				o.interval = d
+			}
+		case "delay":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			if d, err := time.ParseDuration(v); err == nil {
+				o.delay = d
+			}
+		case "deps":
+			o.deps = true
+		case "deps-depth":
+			v := eq
+			if v == "" {
+				v = take(&i)
+			}
+			if n, err := strconv.Atoi(v); err == nil {
+				o.depsDepth = n
+			}
+		case "q", "quiet":
+			o.quiet = true
+		case "v", "verbose":
+			o.verbose = true
+		case "fresh":
+			o.fresh = true
+		case "metadata-only":
+			o.metaOnly = true
+		case "dry-run":
+			o.dryRun = true
+		case "nexus-key":
+			sopts.NexusKey = take(&i)
+		case "cf-key":
+			sopts.CFKey = take(&i)
+		case "modio-key":
+			sopts.ModioKey = take(&i)
 		default:
-			terms = append(terms, w)
+			rest = append(rest, words[i])
 		}
 	}
-	query := strings.Join(terms, " ")
+	return rest
+}
+
+// runSearch queries every searchable source and prints pasteable refs.
+func runSearch(ctx context.Context, client *core.Client, term *core.Term, o *options, sopts *source.Options, words []string) error {
+	query := strings.Join(words, " ")
 	if query == "" {
 		return fmt.Errorf("usage: mod-archiver search <query> [-src name] [-game x] [-limit n]")
 	}
@@ -263,6 +351,89 @@ func scopeLabel(hint string) string {
 		return "all sources"
 	}
 	return hint
+}
+
+// runVerify re-checks every done file in the given archives against
+// its recorded digests. No network access.
+func runVerify(term *core.Term, o *options, args []string) int {
+	var dirs []string
+	if len(args) == 0 {
+		var err error
+		if dirs, err = core.ArchiveDirs(o.out); err != nil {
+			term.Errf("%v", err)
+			return 2
+		}
+	} else {
+		dirs = args
+	}
+	bad := 0
+	for _, d := range dirs {
+		rep, err := core.VerifyManifest(d)
+		if err != nil {
+			term.Errf("%s: %v", d, err)
+			bad++
+			continue
+		}
+		for _, p := range rep.Missing {
+			term.Errf("  missing: %s", p)
+		}
+		for _, p := range rep.Bad {
+			term.Errf("  corrupt: %s", p)
+		}
+		if len(rep.Missing)+len(rep.Bad) > 0 {
+			bad++
+			term.Warnf("%s: %d ok, %d missing, %d corrupt", filepath.Base(d), rep.OK, len(rep.Missing), len(rep.Bad))
+		} else {
+			term.Okf("%s: %d file(s) verified", filepath.Base(d), rep.OK)
+		}
+	}
+	if bad > 0 {
+		return 1
+	}
+	return 0
+}
+
+// runWatch loops an update pass every -interval until interrupted.
+func runWatch(ctx context.Context, client *core.Client, term *core.Term, o *options, sopts *source.Options, targets []string) int {
+	for pass := 0; ; pass++ {
+		if ctx.Err() != nil {
+			return 130
+		}
+		inputs := targets
+		if len(inputs) == 0 {
+			dirs, err := core.ArchiveDirs(o.out)
+			if err != nil {
+				term.Warnf("watch: %v", err)
+			} else {
+				for _, d := range dirs {
+					if m, err := core.LoadManifest(d); err == nil && m.Project != nil && m.Project.Input != "" {
+						inputs = append(inputs, m.Project.Input)
+					}
+				}
+			}
+		}
+		if len(inputs) == 0 {
+			term.Warnf("watch: no targets and no archives under %s", o.out)
+		}
+		visited := map[string]bool{}
+		for _, input := range inputs {
+			if ctx.Err() != nil {
+				break
+			}
+			visited[strings.ToLower(input)] = true
+			if err := archiveTarget(ctx, client, term, o, sopts, input, 0, visited); err != nil &&
+				!errors.Is(err, core.ErrInterrupted) {
+				term.Warnf("%s: %v", input, err)
+			}
+		}
+		term.Infof("watch pass %d done, next at +%s", pass+1, o.interval)
+		select {
+		case <-ctx.Done():
+			term.Warnf("watch stopped")
+			return 130
+		case <-time.After(o.interval):
+		}
+	}
 }
 
 // saveOr persists the manifest, warning when the write fails.
@@ -346,25 +517,49 @@ func Run(args []string, stdout, stderr *os.File) int {
 		VersionFilter: o.vFilter,
 	}
 
-	// search mode: mod-archiver search <query>. The flag parser stops
-	// at the first positional, so flags trailing the query are picked
-	// out by hand here.
-	if targets[0] == "search" {
-		if err := runSearch(ctx, client, term, o, sopts, targets[1:]); err != nil {
+	// subcommands. The flag parser stops at the first positional, so
+	// trailing flags after the subcommand are picked out by hand.
+	switch targets[0] {
+	case "search":
+		rest := pickSubFlags(o, sopts, targets[1:])
+		if err := runSearch(ctx, client, term, o, sopts, rest); err != nil {
 			term.Errf("%v", err)
 			return 1
 		}
 		return 0
+	case "verify":
+		return runVerify(term, o, pickSubFlags(o, sopts, targets[1:]))
+	case "check":
+		o.dryRun, o.dryCheck = true, true
+		targets = pickSubFlags(o, sopts, targets[1:])
+	case "update":
+		targets = pickSubFlags(o, sopts, targets[1:])
+		if len(targets) == 0 {
+			dirs, err := core.ArchiveDirs(o.out)
+			if err != nil {
+				term.Errf("%v", err)
+				return 2
+			}
+			for _, d := range dirs {
+				if m, err := core.LoadManifest(d); err == nil && m.Project != nil && m.Project.Input != "" {
+					targets = append(targets, m.Project.Input)
+				}
+			}
+		}
+	case "watch":
+		return runWatch(ctx, client, term, o, sopts, pickSubFlags(o, sopts, targets[1:]))
 	}
 
 	term.Infof("%s archiving %d target(s) to %s", term.Bold("mod-archiver "+toolVersion), len(targets), o.out)
 
 	failed := 0
+	visited := map[string]bool{}
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := archiveTarget(ctx, client, term, o, sopts, target); err != nil {
+		visited[strings.ToLower(target)] = true
+		if err := archiveTarget(ctx, client, term, o, sopts, target, 0, visited); err != nil {
 			if errors.Is(err, core.ErrInterrupted) || ctx.Err() != nil {
 				break
 			}
@@ -383,7 +578,7 @@ func Run(args []string, stdout, stderr *os.File) int {
 	return 0
 }
 
-func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *options, sopts *source.Options, input string) error {
+func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *options, sopts *source.Options, input string, depth int, visited map[string]bool) error {
 	// bare slug: default source is modrinth unless hinted otherwise
 	src, err := source.Lookup(input, o.srcHint)
 	if err != nil {
@@ -416,6 +611,9 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 		Manifest: manifest,
 	}
 	tasks, err := src.Collect(ctx, cc)
+	if manifest.Project != nil {
+		manifest.Project.Input = input
+	}
 	if err != nil {
 		saveOr(term, manifest)
 		if he := core.IsAuth(err); he {
@@ -425,18 +623,37 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 	}
 	if o.dryRun {
 		var total int64
+		var newN, changedN int
 		bySection := map[string]int{}
 		for _, t := range tasks {
 			total += t.Size
 			bySection[t.Section]++
-			term.Infof("%-7s %-40s %s", t.Section, t.Title, core.HumanBytes(t.Size))
+			label := "new"
+			if t.Entry != nil && t.Entry.Path != "" {
+				label = "changed"
+				changedN++
+			} else {
+				newN++
+			}
+			prefix := "+"
+			if o.dryCheck {
+				prefix = "  " + label
+			}
+			term.Infof("%s %-7s %-40s %s", prefix, t.Section, t.Title, core.HumanBytes(t.Size))
 		}
 		parts := []string{}
 		for sec, n := range bySection {
 			parts = append(parts, fmt.Sprintf("%d %s", n, sec))
 		}
-		term.Okf("%s: %s, %s total (dry run, nothing downloaded)", name, strings.Join(parts, ", "), core.HumanBytes(total))
 		saveOr(term, manifest)
+		switch {
+		case o.dryCheck && len(tasks) == 0:
+			term.Okf("%s: up to date", name)
+		case o.dryCheck:
+			term.Okf("%s: %d new, %d changed, %s total (check, nothing downloaded)", name, newN, changedN, core.HumanBytes(total))
+		default:
+			term.Okf("%s: %s, %s total (dry run, nothing downloaded)", name, strings.Join(parts, ", "), core.HumanBytes(total))
+		}
 		return nil
 	}
 	if len(tasks) == 0 {
@@ -457,6 +674,29 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 
 	saveOr(term, manifest)
 	done, failedN, pending := manifest.Counts()
+
+	// dependency fan-out before reporting the parent result
+	if o.deps && depth < o.depsDepth && ctx.Err() == nil {
+		if ds, ok := src.(source.DepsSource); ok {
+			if refs, derr := ds.Dependencies(ctx, cc); derr != nil {
+				term.Warnf("%s: dep lookup failed: %v", name, derr)
+			} else {
+				for _, ref := range refs {
+					key := strings.ToLower(ref)
+					if visited[key] || ctx.Err() != nil {
+						continue
+					}
+					visited[key] = true
+					term.Infof("%s requires %s", name, term.Green(ref))
+					if derr := archiveTarget(ctx, c, term, o, sopts, ref, depth+1, visited); derr != nil &&
+						!errors.Is(derr, core.ErrInterrupted) {
+						term.Warnf("dep %s: %v", ref, derr)
+					}
+				}
+			}
+		}
+	}
+
 	switch {
 	case ctx.Err() != nil:
 		term.Warnf("%s: paused at %d done, %d pending", name, done, pending)
@@ -602,6 +842,7 @@ func applyResult(term *core.Term, m *core.Manifest, dir string, t *core.Task, re
 		e.FastHash = res.FastHash
 		e.SHA256 = res.SHA256
 		e.HashOK = res.HashOK
+		e.VerifiedHashes = maps.Clone(t.Hashes)
 		e.Error = ""
 		tag := ""
 		if res.HashOK {

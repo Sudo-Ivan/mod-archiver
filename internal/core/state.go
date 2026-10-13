@@ -23,6 +23,7 @@ type Project struct {
 	Source      string            `json:"source"`
 	ID          string            `json:"id"`
 	Slug        string            `json:"slug"`
+	Input       string            `json:"input,omitempty"`
 	Title       string            `json:"title"`
 	Description string            `json:"description"`
 	Author      string            `json:"author"`
@@ -47,11 +48,14 @@ type ItemEntry struct {
 	Summary   string            `json:"summary,omitempty"`
 	Size      int64             `json:"size"`
 	Hashes    map[string]string `json:"hashes,omitempty"` // remote digests: md5, sha1, sha512
-	HashOK    bool              `json:"hash_ok"`
-	FastHash  string            `json:"fast_hash,omitempty"`
-	SHA256    string            `json:"sha256,omitempty"`
-	Status    string            `json:"status"`
-	Error     string            `json:"error,omitempty"`
+	// VerifiedHashes records the remote digests the on disk file was
+	// last checked against, so a republished file re-downloads.
+	VerifiedHashes map[string]string `json:"verified_hashes,omitempty"`
+	HashOK         bool              `json:"hash_ok"`
+	FastHash       string            `json:"fast_hash,omitempty"`
+	SHA256         string            `json:"sha256,omitempty"`
+	Status         string            `json:"status"`
+	Error          string            `json:"error,omitempty"`
 }
 
 // Manifest is the archive record for one project. It doubles as the

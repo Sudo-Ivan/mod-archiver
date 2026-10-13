@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +17,34 @@ import (
 
 func testSearchCtx(t *testing.T, base string) *SearchCtx {
 	t.Helper()
-	term := core.NewTerm(os.NewFile(0, os.DevNull), "never", true, false)
+	term := core.NewTerm(nullFile(t), "never", true, false)
 	c := core.NewClient("test", 0, 1, 30*time.Second, term)
 	return &SearchCtx{Query: "x", Limit: 3, Client: c, Term: term, Opts: &Options{}}
+}
+
+func nullFile(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+func testClient(t *testing.T, term *core.Term) *core.Client {
+	t.Helper()
+	return core.NewClient("test", 0, 1, 30*time.Second, term)
+}
+
+func writeFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSteamSearchPage(t *testing.T) {
