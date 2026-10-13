@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package core
 
 import (
 	"crypto/md5"

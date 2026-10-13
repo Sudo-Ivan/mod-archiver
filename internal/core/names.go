@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package core
 
 import (
 	"path/filepath"
@@ -59,9 +59,9 @@ func SanitizeName(s string) string {
 	return s
 }
 
-// uniqueName returns name, or name-2.ext, name-3.ext, ... when the
+// UniqueName returns name, or name-2.ext, name-3.ext, ... when the
 // name is already taken in the seen set.
-func uniqueName(name string, seen map[string]int) string {
+func UniqueName(name string, seen map[string]int) string {
 	if seen[name] == 0 {
 		seen[name] = 1
 		return name

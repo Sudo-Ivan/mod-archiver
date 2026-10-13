@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package core
 
 import (
 	"strings"
@@ -38,9 +38,9 @@ func TestSanitizeNameLength(t *testing.T) {
 
 func TestUniqueName(t *testing.T) {
 	seen := map[string]int{}
-	a := uniqueName("f.rar", seen)
-	b := uniqueName("f.rar", seen)
-	c := uniqueName("f.rar", seen)
+	a := UniqueName("f.rar", seen)
+	b := UniqueName("f.rar", seen)
+	c := UniqueName("f.rar", seen)
 	if a != "f.rar" || b != "f-2.rar" || c != "f-3.rar" {
 		t.Fatalf("got %q %q %q", a, b, c)
 	}

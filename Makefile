@@ -1,4 +1,4 @@
-BIN := moddb-archiver
+BIN := mod-archiver
 
 all: fmt vet test build
 

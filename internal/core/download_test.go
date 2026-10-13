@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package core
 
 import (
 	"context"
@@ -42,31 +42,32 @@ func testClient(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { devnull.Close() })
-	term := NewTerm(devnull, colorNever, true, false)
+	term := NewTerm(devnull, "never", true, false)
 	return NewClient("test", 0, 2, 10*time.Second, term)
 }
 
 func TestDownloadFresh(t *testing.T) {
-	payload := []byte(strings.Repeat("moddb-archive-test-payload-", 5000))
+	payload := []byte(strings.Repeat("mod-archive-test-payload-", 5000))
 	srv := testServer(t, payload)
 	sum := md5.Sum(payload)
-	task := &dlTask{
-		title: "test", kind: kindMedia, mediaURL: srv.URL + "/file.bin",
-		destDir: t.TempDir(), filename: "file.bin",
-		size: int64(len(payload)), md5: hex.EncodeToString(sum[:]),
+	task := &Task{
+		Title: "test", DirectURL: srv.URL + "/file.bin",
+		DestDir: t.TempDir(), Filename: "file.bin",
+		Size:   int64(len(payload)),
+		Hashes: map[string]string{"md5": hex.EncodeToString(sum[:])},
 	}
-	res, err := downloadOne(context.Background(), testClient(t), task, "fast", nil)
+	res, err := FetchTask(context.Background(), testClient(t), task, "fast", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.md5OK {
-		t.Error("md5 not verified")
+	if !res.HashOK {
+		t.Error("hash not verified")
 	}
-	got, _ := os.ReadFile(res.path)
+	got, _ := os.ReadFile(res.Path)
 	if len(got) != len(payload) {
 		t.Fatalf("size %d, want %d", len(got), len(payload))
 	}
-	if res.fastHash == "" {
+	if res.FastHash == "" {
 		t.Error("no fast hash")
 	}
 }
@@ -78,16 +79,16 @@ func TestDownloadResume(t *testing.T) {
 	part := filepath.Join(dir, "file.bin.part")
 	os.WriteFile(part, payload[:len(payload)/3], 0o644)
 
-	task := &dlTask{
-		title: "test", kind: kindMedia, mediaURL: srv.URL + "/file.bin",
-		destDir: dir, filename: "file.bin",
-		size: int64(len(payload)),
+	task := &Task{
+		Title: "test", DirectURL: srv.URL + "/file.bin",
+		DestDir: dir, Filename: "file.bin",
+		Size: int64(len(payload)),
 	}
-	res, err := downloadOne(context.Background(), testClient(t), task, "fast", nil)
+	res, err := FetchTask(context.Background(), testClient(t), task, "fast", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := os.ReadFile(res.path)
+	got, _ := os.ReadFile(res.Path)
 	if len(got) != len(payload) {
 		t.Fatalf("resumed size %d, want %d", len(got), len(payload))
 	}
@@ -103,7 +104,6 @@ func TestDownloadInterrupt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
-		// drip feed so cancellation lands mid stream
 		for i := 0; i < len(payload); i += 64 << 10 {
 			w.Write(payload[i : i+64<<10])
 			if f, ok := w.(http.Flusher); ok {
@@ -116,15 +116,15 @@ func TestDownloadInterrupt(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := t.TempDir()
-	task := &dlTask{
-		title: "test", kind: kindMedia, mediaURL: srv.URL + "/big.bin",
-		destDir: dir, filename: "big.bin", size: int64(len(payload)),
+	task := &Task{
+		Title: "test", DirectURL: srv.URL + "/big.bin",
+		DestDir: dir, Filename: "big.bin", Size: int64(len(payload)),
 	}
 	go func() {
 		time.Sleep(150 * time.Millisecond)
 		cancel()
 	}()
-	_, err := downloadOne(ctx, testClient(t), task, "fast", nil)
+	_, err := FetchTask(ctx, testClient(t), task, "fast", nil)
 	if err != ErrInterrupted {
 		t.Fatalf("err = %v, want ErrInterrupted", err)
 	}
@@ -136,20 +136,19 @@ func TestDownloadInterrupt(t *testing.T) {
 	if st.Size() == 0 || st.Size() >= int64(len(payload)) {
 		t.Fatalf("partial size %d unexpected", st.Size())
 	}
-	// final artifact must not exist
 	if _, serr := os.Stat(filepath.Join(dir, "big.bin")); serr == nil {
 		t.Fatal("dest exists after interrupt")
 	}
 }
 
-func TestDownloadMD5Mismatch(t *testing.T) {
+func TestDownloadHashMismatch(t *testing.T) {
 	srv := testServer(t, []byte("bad contents"))
-	task := &dlTask{
-		title: "test", kind: kindMedia, mediaURL: srv.URL + "/f.bin",
-		destDir: t.TempDir(), filename: "f.bin",
-		md5: "00000000000000000000000000000000",
+	task := &Task{
+		Title: "test", DirectURL: srv.URL + "/f.bin",
+		DestDir: t.TempDir(), Filename: "f.bin",
+		Hashes: map[string]string{"md5": "00000000000000000000000000000000"},
 	}
-	_, err := downloadOne(context.Background(), testClient(t), task, "fast", nil)
+	_, err := FetchTask(context.Background(), testClient(t), task, "fast", nil)
 	if err == nil || !strings.Contains(err.Error(), "md5") {
 		t.Fatalf("err = %v, want md5 mismatch", err)
 	}

@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"moddb-archiver/internal/app"
+	"mod-archiver/internal/app"
 )
 
 func main() {

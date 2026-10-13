@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package core
 
 import (
 	"fmt"
@@ -8,14 +8,6 @@ import (
 	"os"
 	"sync"
 	"time"
-)
-
-type colorMode int
-
-const (
-	colorAuto colorMode = iota
-	colorAlways
-	colorNever
 )
 
 const (
@@ -45,15 +37,15 @@ type Term struct {
 	lastRep time.Time
 }
 
-func NewTerm(out *os.File, mode colorMode, quiet, verbose bool) *Term {
+func NewTerm(out *os.File, mode string, quiet, verbose bool) *Term {
 	t := &Term{out: out, file: out, quiet: quiet, verbose: verbose}
 	if st, err := out.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
 		t.tty = true
 	}
 	switch mode {
-	case colorAlways:
+	case "always":
 		t.color = true
-	case colorNever:
+	case "never":
 		t.color = false
 	default:
 		t.color = t.tty && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb" && enableANSI(out)
@@ -174,7 +166,8 @@ func (t *Term) Green(s string) string { return t.paint(ansiGreen, s) }
 // TTY reports whether the output is an interactive terminal.
 func (t *Term) TTY() bool { return t.tty }
 
-func humanBytes(n int64) string {
+// HumanBytes renders n bytes as a compact string like 26.4MB.
+func HumanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
 		return fmt.Sprintf("%dB", n)
@@ -187,11 +180,11 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
-func humanRate(bytesPerSec float64) string {
-	return humanBytes(int64(bytesPerSec)) + "/s"
+func HumanRate(bytesPerSec float64) string {
+	return HumanBytes(int64(bytesPerSec)) + "/s"
 }
 
-func humanDur(d time.Duration) string {
+func HumanDur(d time.Duration) string {
 	if d < time.Second {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
@@ -201,8 +194,23 @@ func humanDur(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// renderBar draws an ASCII progress bar like [====>     ] 42%
-func renderBar(width int, frac float64) string {
+// ProgressLine composes a single status line for a download in flight.
+func (t *Term) ProgressLine(title string, frac float64, done int64, rate float64, total int64) string {
+	line := fmt.Sprintf("%s %-22.22s %s %5.1f%% %s %s",
+		t.paint(ansiBlue, ">>"),
+		title,
+		RenderBar(14, frac),
+		frac*100,
+		HumanBytes(done),
+		HumanRate(rate))
+	if total > 0 {
+		line += " of " + HumanBytes(total)
+	}
+	return line
+}
+
+// RenderBar draws an ASCII progress bar like [====>     ] 42%
+func RenderBar(width int, frac float64) string {
 	if frac < 0 {
 		frac = 0
 	}

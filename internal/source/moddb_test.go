@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-package app
+package source
 
 import (
 	"os"
@@ -18,7 +18,7 @@ func fixture(t *testing.T, name string) []byte {
 }
 
 func TestParseModPage(t *testing.T) {
-	m := ParseModPage(fixture(t, "mod.html"), "funny-project-another-generic-doom-mod")
+	m := parseModPage(fixture(t, "mod.html"), "funny-project-another-generic-doom-mod")
 	if m.Title == "" {
 		t.Error("empty title")
 	}
@@ -28,8 +28,8 @@ func TestParseModPage(t *testing.T) {
 	if m.Game != "Doom II" {
 		t.Errorf("game = %q", m.Game)
 	}
-	if m.ProfileHTML == "" {
-		t.Error("profile html not extracted")
+	if m.Extra["profile_text"] == "" {
+		t.Error("profile text not extracted")
 	}
 	if m.URL != "https://www.moddb.com/mods/funny-project-another-generic-doom-mod" {
 		t.Errorf("url = %q", m.URL)
@@ -37,7 +37,7 @@ func TestParseModPage(t *testing.T) {
 }
 
 func TestParseDownloadsList(t *testing.T) {
-	stubs := ParseDownloadsList(fixture(t, "downloads.html"))
+	stubs := parseModDBDownloadsList(fixture(t, "downloads.html"))
 	if len(stubs) != 1 {
 		t.Fatalf("got %d stubs, want 1", len(stubs))
 	}
@@ -60,7 +60,7 @@ func TestParseDownloadsList(t *testing.T) {
 }
 
 func TestParseFilePage(t *testing.T) {
-	fi := ParseFilePage(fixture(t, "file.html"))
+	fi := parseModDBFilePage(fixture(t, "file.html"))
 	if fi.ID != "318765" {
 		t.Errorf("id = %q", fi.ID)
 	}
@@ -82,7 +82,7 @@ func TestParseFilePage(t *testing.T) {
 }
 
 func TestParseStartPage(t *testing.T) {
-	got := ParseStartPage(fixture(t, "start.html"))
+	got := parseModDBStartPage(fixture(t, "start.html"))
 	want := "https://www.moddb.com/downloads/mirror/318765/134/1ebe1d0fe48187066ce936a0e1b9d57f"
 	if got != want {
 		t.Fatalf("mirror = %q, want %q", got, want)
@@ -91,19 +91,22 @@ func TestParseStartPage(t *testing.T) {
 
 func TestModSlug(t *testing.T) {
 	cases := map[string]string{
-		"my-mod":                                 "my-mod",
-		"mods/my-mod":                            "my-mod",
+		"moddb:my-mod":                           "my-mod",
+		"mods/my-mod":                            "",
 		"https://www.moddb.com/mods/my-mod":      "my-mod",
 		"http://moddb.com/mods/my-mod/downloads": "my-mod",
 		"https://www.moddb.com/mods/my-mod?x=1/": "my-mod",
 	}
 	for in, want := range cases {
-		got, err := modSlug(in)
-		if err != nil || got != want {
-			t.Errorf("modSlug(%q) = %q, %v; want %q", in, got, err, want)
+		got, err := moddbSlug(in)
+		if want == "" {
+			if err == nil {
+				t.Errorf("moddbSlug(%q) expected error, got %q", in, got)
+			}
+			continue
 		}
-	}
-	if _, err := modSlug("https://example.com/??"); err == nil {
-		t.Error("expected error for bad slug")
+		if err != nil || got != want {
+			t.Errorf("moddbSlug(%q) = %q, %v; want %q", in, got, err, want)
+		}
 	}
 }
