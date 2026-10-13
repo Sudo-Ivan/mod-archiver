@@ -186,6 +186,7 @@ func findSteamcmd(opt string) (string, error) {
 			continue
 		}
 		if strings.ContainsRune(c, '/') || strings.ContainsRune(c, os.PathSeparator) {
+			// #nosec G703 -- steamcmd path is operator configured
 			if st, err := os.Stat(c); err == nil && !st.IsDir() {
 				return c, nil
 			}
@@ -229,7 +230,8 @@ func steamFetch(ctx context.Context, cc *CollectCtx, appid, itemid, dest string,
 	cc.Term.Debugf("steamcmd %s", strings.Join(args, " "))
 	const attempts = 3
 	var lastErr error
-	for try := 0; try < attempts; try++ {
+	for range attempts {
+		// #nosec G204 -- bin is the steamcmd binary, detected or user configured
 		cmd := exec.CommandContext(ctx, bin, args...)
 		out, _ := cmd.CombinedOutput()
 		if ctx.Err() != nil {
@@ -241,12 +243,12 @@ func steamFetch(ctx context.Context, cc *CollectCtx, appid, itemid, dest string,
 			// interrupted copy never looks complete
 			src := m[1]
 			tmp := dest + ".part"
-			os.RemoveAll(tmp)
+			_ = os.RemoveAll(tmp)
 			if err := copyTree(src, tmp); err != nil {
-				os.RemoveAll(tmp)
+				_ = os.RemoveAll(tmp)
 				return nil, err
 			}
-			os.RemoveAll(dest)
+			_ = os.RemoveAll(dest)
 			if err := os.Rename(tmp, dest); err != nil {
 				return nil, err
 			}
@@ -277,22 +279,28 @@ func copyTree(src, dest string) error {
 		rel, _ := filepath.Rel(src, p)
 		to := filepath.Join(dest, rel)
 		if d.IsDir() {
-			return os.MkdirAll(to, 0o755)
+			return os.MkdirAll(to, 0o750)
 		}
+		// #nosec G304 G122 -- p is inside the steamcmd output tree we own
 		in, err := os.Open(p)
 		if err != nil {
 			return err
 		}
-		defer in.Close()
-		out, err := os.Create(to)
+		out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 G306 -- archive file
 		if err != nil {
+			_ = in.Close()
 			return err
 		}
 		if _, err := out.ReadFrom(in); err != nil {
-			out.Close()
+			_ = in.Close()
+			_ = out.Close()
 			return err
 		}
-		return out.Close()
+		if err := out.Close(); err != nil {
+			_ = in.Close()
+			return err
+		}
+		return in.Close()
 	})
 }
 
@@ -364,7 +372,7 @@ func (Steam) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 	if pf.Banned != 0 {
 		term.Warnf("%s: banned on workshop: %s", pf.Title, pf.BanReason)
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -411,7 +419,7 @@ func (Steam) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 			ie.SourceURL = pageURL
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	// resolve each item to a fetch plan now so tasks are complete
 	type plan struct {

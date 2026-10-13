@@ -3,7 +3,7 @@
 package core
 
 import (
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- provider-published digests
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -96,6 +96,7 @@ const sampleSpan = 4 << 20
 // xxHash64 of sampled head, middle and tail blocks. Cheap enough to
 // verify gigabyte files in a single read of a few megabytes.
 func FastHash(path string) (string, int64, error) {
+	// #nosec G304 -- path names a file the user asked to archive
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
@@ -138,7 +139,7 @@ func FastHash(path string) (string, int64, error) {
 	h2 := xxh64(mid, h1)
 	h3 := xxh64(tail, h2)
 	var final [8 + 3*8]byte
-	binary.LittleEndian.PutUint64(final[0:], uint64(size))
+	binary.LittleEndian.PutUint64(final[0:], uint64(size)) // #nosec G115 -- file size is non-negative
 	binary.LittleEndian.PutUint64(final[8:], h1)
 	binary.LittleEndian.PutUint64(final[16:], h2)
 	binary.LittleEndian.PutUint64(final[24:], h3)
@@ -147,6 +148,7 @@ func FastHash(path string) (string, int64, error) {
 
 // SumFile streams path through h and returns the hex digest.
 func SumFile(path string, h hash.Hash) (string, error) {
+	// #nosec G304 -- path names a file the user asked to archive
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -158,5 +160,5 @@ func SumFile(path string, h hash.Hash) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func MD5File(path string) (string, error)    { return SumFile(path, md5.New()) }
+func MD5File(path string) (string, error)    { return SumFile(path, md5.New()) } // #nosec G401
 func SHA256File(path string) (string, error) { return SumFile(path, sha256.New()) }

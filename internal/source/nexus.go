@@ -158,7 +158,7 @@ func (Nexus) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 	if mod.Adult {
 		term.Warnf("%s: flagged adult content", mod.Name)
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -194,7 +194,7 @@ func (Nexus) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 		e.Title = "cover"
 		e.SourceURL = pageURL
 	}
-	m.Save()
+	saveOr(term, m)
 
 	dlURL := func(rctx context.Context, fileID string) (string, error) {
 		u := base + "/files/" + fileID + "/download_link.json"

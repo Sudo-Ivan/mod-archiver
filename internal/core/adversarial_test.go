@@ -77,9 +77,9 @@ func TestDownload416Done(t *testing.T) {
 // resume rather than accept a truncated file.
 func TestDownloadMidStreamDrop(t *testing.T) {
 	payload := []byte("1234567890abcdefghijklmnopqrstuvwxyz")
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n == 1 {
 			// first attempt dies mid stream
 			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
@@ -117,7 +117,7 @@ func TestDownloadMidStreamDrop(t *testing.T) {
 	if string(got) != string(payload) {
 		t.Fatalf("got %q", got)
 	}
-	if atomic.LoadInt32(&calls) < 2 {
+	if calls.Load() < 2 {
 		t.Fatal("expected a retry after mid-stream drop")
 	}
 }
@@ -153,9 +153,9 @@ func TestClientRetry429(t *testing.T) {
 
 // Flaky 5xx eventually succeeds.
 func TestClientRetry5xx(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&calls, 1) < 3 {
+		if calls.Add(1) < 3 {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}

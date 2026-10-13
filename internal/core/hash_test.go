@@ -77,7 +77,7 @@ func TestFastHashSampled(t *testing.T) {
 	for i := range chunk {
 		chunk[i] = byte(i)
 	}
-	for i := 0; i < 13; i++ {
+	for range 13 {
 		if _, err := f.Write(chunk); err != nil {
 			t.Fatal(err)
 		}

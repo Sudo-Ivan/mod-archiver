@@ -162,7 +162,7 @@ func (GameBanana) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, er
 		},
 	}
 	term.Okf("%s %s: %s (%s)", itemtype, id, it.Name, it.Game.Name)
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -200,7 +200,7 @@ func (GameBanana) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, er
 			e.SourceURL = pageURL
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	dlByID := map[string]string{}
 	for _, f := range it.Files {

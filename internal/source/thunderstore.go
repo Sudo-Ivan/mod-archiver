@@ -148,7 +148,7 @@ func (Thunderstore) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, 
 	if p.IsDeprecated {
 		term.Warnf("%s: deprecated", p.FullName)
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -181,7 +181,7 @@ func (Thunderstore) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, 
 		e.Title = "icon"
 		e.SourceURL = pageURL
 	}
-	m.Save()
+	saveOr(term, m)
 
 	dlByID := map[string]string{}
 	for _, v := range versions {

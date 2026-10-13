@@ -126,6 +126,13 @@ func PendingTasks(cc *CollectCtx, mk func(e *core.ItemEntry, destName string) *c
 	return tasks
 }
 
+// saveOr persists the manifest, warning when the write fails.
+func saveOr(term *core.Term, m *core.Manifest) {
+	if err := m.Save(); err != nil {
+		term.Warnf("manifest save failed: %v", err)
+	}
+}
+
 // SplitHost extracts host and path segments from a URL-ish input.
 func SplitHost(input string) (host string, segs []string) {
 	s := strings.TrimSpace(input)
@@ -142,7 +149,7 @@ func SplitHost(input string) (host string, segs []string) {
 	parts := strings.SplitN(s, "/", 2)
 	host = parts[0]
 	if len(parts) > 1 {
-		for _, seg := range strings.Split(parts[1], "/") {
+		for seg := range strings.SplitSeq(parts[1], "/") {
 			if seg != "" {
 				segs = append(segs, seg)
 			}

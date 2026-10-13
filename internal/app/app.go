@@ -176,7 +176,7 @@ flags:`)
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, line := range strings.Split(string(b), "\n") {
+		for line := range strings.SplitSeq(string(b), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
@@ -192,21 +192,30 @@ flags:`)
 	return o, targets, nil
 }
 
+// saveOr persists the manifest, warning when the write fails.
+func saveOr(term *core.Term, m *core.Manifest) {
+	if err := m.Save(); err != nil {
+		term.Warnf("manifest save failed: %v", err)
+	}
+}
+
 // probeFlareSolverr checks that the endpoint is up, returns false when
 // it is not reachable so challenge handling falls back to backoff.
 func probeFlareSolverr(u string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	// #nosec G704 -- the solver endpoint is operator configured
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u, "/")+"/", nil)
 	if err != nil {
 		return false
 	}
+	// #nosec G704 -- same endpoint as above
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -302,7 +311,7 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 	}
 	name := core.SanitizeName(src.Name() + "-" + src.DirName(input))
 	dir := filepath.Join(o.out, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 
@@ -324,7 +333,7 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 	}
 	tasks, err := src.Collect(ctx, cc)
 	if err != nil {
-		manifest.Save()
+		saveOr(term, manifest)
 		if he := core.IsAuth(err); he {
 			return fmt.Errorf("%v (check your api key or login credentials)", err)
 		}
@@ -343,12 +352,12 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 			parts = append(parts, fmt.Sprintf("%d %s", n, sec))
 		}
 		term.Okf("%s: %s, %s total (dry run, nothing downloaded)", name, strings.Join(parts, ", "), core.HumanBytes(total))
-		manifest.Save()
+		saveOr(term, manifest)
 		return nil
 	}
 	if len(tasks) == 0 {
 		term.Okf("%s: nothing to download, archive is complete", name)
-		manifest.Save()
+		saveOr(term, manifest)
 		return nil
 	}
 	if o.limit > 0 {
@@ -362,7 +371,7 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 
 	stats := runPool(ctx, c, term, o, manifest, dir, tasks)
 
-	manifest.Save()
+	saveOr(term, manifest)
 	done, failedN, pending := manifest.Counts()
 	switch {
 	case ctx.Err() != nil:
@@ -426,7 +435,7 @@ func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m
 		go func(slot int) {
 			defer wg.Done()
 			for t := range queue {
-				if err := os.MkdirAll(t.DestDir, 0o755); err != nil {
+				if err := os.MkdirAll(t.DestDir, 0o750); err != nil {
 					term.Errf("mkdir %s: %v", t.DestDir, err)
 					continue
 				}
@@ -460,7 +469,7 @@ func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m
 				}
 				mu.Unlock()
 				render()
-				m.Save()
+				saveOr(term, m)
 			}
 		}(slot)
 	}

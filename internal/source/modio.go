@@ -217,7 +217,7 @@ func (ModIO) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 		m.Project.Extra["description"] = desc
 	}
 	term.Okf("%s/%s: %s (%s)", gameName, mod.NameID, mod.Name, pageURL)
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -268,7 +268,7 @@ func (ModIO) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 			e.SourceURL = pageURL
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	dlByID := map[int64]string{}
 	for _, f := range files {

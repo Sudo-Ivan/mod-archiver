@@ -239,7 +239,7 @@ func (CurseForge) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, er
 	if mod.AllowDistribution != nil && !*mod.AllowDistribution {
 		term.Warnf("%s: author opted out of third party distribution, CDN urls will be constructed directly", mod.Name)
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -305,7 +305,7 @@ func (CurseForge) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, er
 			e.SourceURL = m.Project.URL
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	// per entry download urls
 	dlByID := map[int64]string{}

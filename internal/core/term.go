@@ -102,7 +102,7 @@ func (t *Term) Release() {
 	}
 	n := len(t.status)
 	fmt.Fprintf(t.out, "\x1b[%dA", n)
-	for i := 0; i < n; i++ {
+	for range n {
 		fmt.Fprint(t.out, "\x1b[2K")
 		fmt.Fprintln(t.out)
 	}
@@ -219,7 +219,7 @@ func RenderBar(width int, frac float64) string {
 	}
 	fill := int(frac * float64(width))
 	bar := make([]byte, 0, width)
-	for i := 0; i < width; i++ {
+	for i := range width {
 		switch {
 		case i < fill:
 			bar = append(bar, '=')

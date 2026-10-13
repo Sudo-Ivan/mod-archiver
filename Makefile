@@ -1,12 +1,15 @@
 BIN := mod-archiver
 
-all: fmt vet test build
+all: fmt vet test lint build
 
 fmt:
-	gofmt -w .
+	gofmt -s -w .
 
 vet:
 	go vet ./...
+
+lint:
+	golangci-lint run ./...
 
 test:
 	go test ./...
@@ -17,4 +20,4 @@ build:
 clean:
 	rm -rf bin
 
-.PHONY: all fmt vet test build clean
+.PHONY: all fmt vet lint test build clean

@@ -4,14 +4,15 @@ package core
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
+	"crypto/md5"  // #nosec G501 -- provider digests
+	"crypto/sha1" // #nosec G505 -- provider digests
 	"crypto/sha256"
 	"crypto/sha512"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,9 +61,9 @@ type Result struct {
 func newHasher(name string) hash.Hash {
 	switch name {
 	case "md5":
-		return md5.New()
+		return md5.New() // #nosec G401
 	case "sha1":
-		return sha1.New()
+		return sha1.New() // #nosec G401
 	case "sha256":
 		return sha256.New()
 	case "sha512":
@@ -94,7 +95,7 @@ func verifyHashes(path string, expect map[string]string) (bool, error) {
 // FetchTask runs a single task to disk with resume support. Data lands
 // in <dest>.part first so an interrupted run can continue later.
 func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog ProgressFn) (*Result, error) {
-	if err := os.MkdirAll(t.DestDir, 0o755); err != nil {
+	if err := os.MkdirAll(t.DestDir, 0o750); err != nil {
 		return nil, err
 	}
 	if t.Run != nil {
@@ -138,7 +139,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 				res.Path, res.Size, res.Skipped = dest, st.Size(), true
 				return res, nil
 			}
-			os.Remove(dest)
+			_ = os.Remove(dest)
 		}
 	}
 
@@ -149,7 +150,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 
 	const attempts = 3
 	var lastErr error
-	for try := 0; try < attempts; try++ {
+	for try := range attempts {
 		if ctx.Err() != nil {
 			return res, ErrInterrupted
 		}
@@ -170,7 +171,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 		// restart it instead of failing on the size check.
 		if t.Size > 0 {
 			if st, serr := os.Stat(part); serr == nil && st.Size() > t.Size {
-				os.Remove(part)
+				_ = os.Remove(part)
 				offset = 0
 			}
 		}
@@ -196,7 +197,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 			res.FastHash = fh
 		}
 		if ok, err := verifyHashes(dest, t.Hashes); err != nil {
-			os.Remove(dest)
+			_ = os.Remove(dest)
 			return res, err
 		} else {
 			res.HashOK = ok
@@ -214,9 +215,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 // Returns the new offset so callers can resume after errors.
 func streamTo(ctx context.Context, c *Client, url, referer, part string, offset int64, hdr http.Header, prog ProgressFn) (int64, error) {
 	extra := http.Header{}
-	for k, vs := range hdr {
-		extra[k] = vs
-	}
+	maps.Copy(extra, hdr)
 	if offset > 0 {
 		extra.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
@@ -229,7 +228,7 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 		}
 		return offset, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch {
 	case offset > 0 && resp.StatusCode == http.StatusPartialContent:
@@ -247,7 +246,8 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 	} else {
 		flag |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(part, flag, 0o644)
+	// #nosec G304 -- part path derives from the sanitized filename
+	f, err := os.OpenFile(part, flag, 0o600)
 	if err != nil {
 		return offset, err
 	}
@@ -263,14 +263,14 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 	buf := make([]byte, 64<<10)
 	for {
 		if ctx.Err() != nil {
-			f.Sync()
-			f.Close()
+			_ = f.Sync()
+			_ = f.Close()
 			return offset, ErrInterrupted
 		}
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
-				f.Close()
+				_ = f.Close()
 				return offset, werr
 			}
 			offset += int64(n)
@@ -282,13 +282,13 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 			break
 		}
 		if rerr != nil {
-			f.Sync()
-			f.Close()
+			_ = f.Sync()
+			_ = f.Close()
 			return offset, rerr
 		}
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return offset, err
 	}
 	return offset, f.Close()

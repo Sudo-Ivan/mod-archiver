@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - nilerr
+    - staticcheck
+    - unconvert
+    - unused
+    - wastedassign
+  settings:
+    gosec:
+      excludes:
+        # md5/sha1 verify provider-published digests, not secrets
+        - G401
+        - G501
+        - G505
+    errcheck:
+      exclude-functions:
+        # terminal drawing and deferred response closes are not
+        # actionable errors
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.ReadCloser.Close
+        - (*os.File).Close
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+run:
+  timeout: 5m
+  tests: false

@@ -77,7 +77,7 @@ func TestDownloadResume(t *testing.T) {
 	srv := testServer(t, payload)
 	dir := t.TempDir()
 	part := filepath.Join(dir, "file.bin.part")
-	os.WriteFile(part, payload[:len(payload)/3], 0o644)
+	os.WriteFile(part, payload[:len(payload)/3], 0o600)
 
 	task := &Task{
 		Title: "test", DirectURL: srv.URL + "/file.bin",

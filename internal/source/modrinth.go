@@ -5,6 +5,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,9 +141,11 @@ func (Modrinth) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, erro
 	}
 	term.Okf("%s: %s (%s)", p.Slug, p.Title, p.ProjectType)
 	if p.Body != "" {
-		os.WriteFile(filepath.Join(cc.Dir, "body.md"), []byte(p.Body), 0o644)
+		if err := os.WriteFile(filepath.Join(cc.Dir, "body.md"), []byte(p.Body), 0o600); err != nil {
+			term.Warnf("body snapshot: %v", err)
+		}
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -170,9 +173,7 @@ func (Modrinth) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, erro
 			e.Summary = strings.Join(v.GameVersions, ", ") + " " + strings.Join(v.Loaders, ", ")
 			e.Size = f.Size
 			e.Hashes = map[string]string{}
-			for algo, h := range f.Hashes {
-				e.Hashes[algo] = h
-			}
+			maps.Copy(e.Hashes, f.Hashes)
 			nfiles++
 		}
 	}
@@ -195,7 +196,7 @@ func (Modrinth) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, erro
 			e.SourceURL = m.Project.URL
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	// map file id -> direct cdn url
 	urlByID := map[string]string{}

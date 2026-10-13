@@ -20,7 +20,7 @@ func TestFastHashMetamorphic(t *testing.T) {
 		orig[i] = byte(rng.IntN(256))
 	}
 	p := filepath.Join(dir, "f.bin")
-	os.WriteFile(p, orig, 0o644)
+	os.WriteFile(p, orig, 0o600)
 
 	h1, _, _ := FastHash(p)
 	h2, _, _ := FastHash(p)
@@ -33,7 +33,7 @@ func TestFastHashMetamorphic(t *testing.T) {
 		mut := append([]byte(nil), orig...)
 		mut[pos] ^= 0xff
 		mp := filepath.Join(dir, "mut.bin")
-		os.WriteFile(mp, mut, 0o644)
+		os.WriteFile(mp, mut, 0o600)
 		hm, _, _ := FastHash(mp)
 		if hm == h1 {
 			t.Fatalf("flip at %d did not change hash", pos)
@@ -44,7 +44,7 @@ func TestFastHashMetamorphic(t *testing.T) {
 	// the digest)
 	short := orig[:len(orig)-1]
 	sp := filepath.Join(dir, "s.bin")
-	os.WriteFile(sp, short, 0o644)
+	os.WriteFile(sp, short, 0o600)
 	hs, _, _ := FastHash(sp)
 	if hs == h1 {
 		t.Fatal("size-only change did not change hash")
@@ -110,8 +110,8 @@ func TestManifestMetamorphic(t *testing.T) {
 		t.Fatal("pending item without file should need download")
 	}
 	// write the file, mark done, must not need download
-	os.MkdirAll(filepath.Join(dir, "files"), 0o755)
-	os.WriteFile(filepath.Join(dir, "files", "a.bin"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "files"), 0o750)
+	os.WriteFile(filepath.Join(dir, "files", "a.bin"), []byte("x"), 0o600)
 	m2.Items[0].Path = "files/a.bin"
 	m2.Items[0].Status = StDone
 	if m2.NeedsDownload(m2.Items[0], dir) {

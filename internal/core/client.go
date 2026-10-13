@@ -40,8 +40,7 @@ func (e *HTTPError) Error() string {
 
 // IsAuth reports whether the error looks like a credentials problem.
 func IsAuth(err error) bool {
-	var he *HTTPError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*HTTPError](err); ok {
 		return he.Code == http.StatusUnauthorized || he.Code == http.StatusForbidden
 	}
 	return false
@@ -191,7 +190,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 		var body []byte
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable {
 			body, _ = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 
 		switch {
@@ -201,11 +200,11 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 			return resp, nil
 
 		case resp.StatusCode == http.StatusNotFound:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, &HTTPError{Code: resp.StatusCode, URL: urlStr}
 
 		case resp.StatusCode == http.StatusTooManyRequests:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			wait := retryAfter(resp)
 			if wait <= 0 {
 				wait = backoff(attempt, 5*time.Second)
@@ -217,7 +216,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 			lastErr = fmt.Errorf("429 too many requests: %s", urlStr)
 
 		case isChallenge(resp.StatusCode, body):
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			challengeWaits++
 			if c.fsURL != "" {
 				// FlareSolverr will handle it. Fail fast so callers
@@ -235,14 +234,14 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 			lastErr = ErrChallenge
 
 		case resp.StatusCode >= 500:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("server error %d: %s", resp.StatusCode, urlStr)
 			if !sleepCtx(ctx, backoff(attempt, 0)) {
 				return nil, ErrInterrupted
 			}
 
 		default:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, &HTTPError{Code: resp.StatusCode, URL: urlStr}
 		}
 	}
@@ -264,7 +263,7 @@ func (c *Client) Get(ctx context.Context, url, referer string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, &HTTPError{Code: resp.StatusCode, URL: url}
 	}
@@ -287,12 +286,12 @@ func (c *Client) GetJSON(ctx context.Context, url, referer string, extra http.He
 		}
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return &HTTPError{Code: resp.StatusCode, URL: url}
 	}
 	if v == nil {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(v)
@@ -323,13 +322,13 @@ func (c *Client) PostJSON(ctx context.Context, url string, form url2.Values, jso
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return &HTTPError{Code: resp.StatusCode, URL: url}
 	}
 	if v == nil {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(v)
@@ -342,8 +341,8 @@ func (c *Client) Resolve(ctx context.Context, url, referer string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	loc := resp.Header.Get("Location")
 	if loc == "" {
 		return "", fmt.Errorf("no redirect from %s (status %d)", url, resp.StatusCode)
@@ -364,11 +363,8 @@ func backoff(attempt int, base time.Duration) time.Duration {
 	if base == 0 {
 		base = 750 * time.Millisecond
 	}
-	d := base << attempt
-	if d > 30*time.Second {
-		d = 30 * time.Second
-	}
-	return d + time.Duration(rand.Int64N(int64(500*time.Millisecond)))
+	d := min(base<<attempt, 30*time.Second)
+	return d + time.Duration(rand.Int64N(int64(500*time.Millisecond))) // #nosec G404 -- jitter only, not security
 }
 
 func retryAfter(resp *http.Response) time.Duration {
@@ -445,7 +441,7 @@ func (c *Client) flareGet(ctx context.Context, target string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return nil, err
@@ -469,10 +465,13 @@ func (c *Client) flareGet(ctx context.Context, target string) ([]byte, error) {
 				}
 			}
 			domains[d] = append(domains[d], &http.Cookie{
-				Name:   fc.Name,
-				Value:  fc.Value,
-				Domain: d,
-				Path:   firstNonEmptyS(fc.Path, "/"),
+				Name:     fc.Name,
+				Value:    fc.Value,
+				Domain:   d,
+				Path:     firstNonEmptyS(fc.Path, "/"),
+				Secure:   true,
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
 			})
 		}
 		for d, cs := range domains {

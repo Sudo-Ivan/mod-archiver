@@ -78,13 +78,15 @@ func (ModDB) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 	}
 	mod := parseModPage(body, slug)
 	m.Project = mod
-	os.WriteFile(filepath.Join(cc.Dir, "page.html"), body, 0o644)
+	if err := os.WriteFile(filepath.Join(cc.Dir, "page.html"), body, 0o600); err != nil {
+		term.Warnf("page snapshot: %v", err)
+	}
 
 	term.Okf("%s: %s", slug, mod.Title)
 	if mod.Author != "" || mod.Game != "" {
 		term.Infof("  %s by %s", term.Dim(mod.Game), mod.Author)
 	}
-	m.Save()
+	saveOr(term, m)
 	if cc.Opts.MetadataOnly {
 		return nil, nil
 	}
@@ -125,7 +127,7 @@ func (ModDB) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 		e.Error = ""
 		term.Debugf("  file %s: %s (%s)", fi.ID, fi.Filename, core.HumanBytes(fi.Size))
 	}
-	m.Save()
+	saveOr(term, m)
 
 	if cc.Opts.Images {
 		urls, err := collectModDBMedia(ctx, c, slug, "images", false)
@@ -149,7 +151,7 @@ func (ModDB) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 			e.SourceURL = mod.URL + "/videos"
 		}
 	}
-	m.Save()
+	saveOr(term, m)
 
 	return PendingTasks(cc, func(e *core.ItemEntry, destName string) *core.Task {
 		t := &core.Task{
