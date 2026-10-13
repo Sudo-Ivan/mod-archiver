@@ -8,6 +8,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -93,6 +94,9 @@ func verifyHashes(path string, expect map[string]string) (bool, error) {
 // FetchTask runs a single task to disk with resume support. Data lands
 // in <dest>.part first so an interrupted run can continue later.
 func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog ProgressFn) (*Result, error) {
+	if err := os.MkdirAll(t.DestDir, 0o755); err != nil {
+		return nil, err
+	}
 	if t.Run != nil {
 		return t.Run(ctx, filepath.Join(t.DestDir, t.Filename), prog)
 	}
@@ -150,7 +154,7 @@ func FetchTask(ctx context.Context, c *Client, t *Task, hashMode string, prog Pr
 			return res, ErrInterrupted
 		}
 		if try > 0 && t.Resolve != nil {
-			// The signed URL may have expired; mint a new one.
+			// The signed URL may have expired. Mint a new one.
 			if u, err := t.Resolve(ctx); err == nil {
 				url = u
 			}
@@ -218,6 +222,11 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 	}
 	resp, err := c.Open(ctx, url, referer, extra)
 	if err != nil {
+		var he *HTTPError
+		if offset > 0 && errors.As(err, &he) && he.Code == http.StatusRequestedRangeNotSatisfiable {
+			// whole file already on disk
+			return offset, nil
+		}
 		return offset, err
 	}
 	defer resp.Body.Close()
@@ -228,9 +237,6 @@ func streamTo(ctx context.Context, c *Client, url, referer, part string, offset 
 	case offset > 0 && resp.StatusCode == http.StatusOK:
 		// range ignored, restart the file
 		offset = 0
-	case offset > 0 && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
-		// whole file already on disk
-		return offset, nil
 	case resp.StatusCode != http.StatusOK:
 		return offset, fmt.Errorf("status %d downloading %s", resp.StatusCode, ShortURL(url))
 	}

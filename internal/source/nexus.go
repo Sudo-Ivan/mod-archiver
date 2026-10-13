@@ -13,7 +13,7 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const nexusAPI = "https://api.nexusmods.com/v1"
+var nexusAPI = "https://api.nexusmods.com/v1"
 
 // Nexus uses the Nexus Mods v1 REST API. It needs a personal api key
 // (nexusmods.com account settings, API access tab). Free accounts must

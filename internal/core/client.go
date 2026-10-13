@@ -27,6 +27,26 @@ var (
 	ErrInterrupted = errors.New("interrupted")
 )
 
+// HTTPError carries the status code so callers can tell auth failures
+// and missing resources apart from network noise.
+type HTTPError struct {
+	Code int
+	URL  string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.Code, e.URL)
+}
+
+// IsAuth reports whether the error looks like a credentials problem.
+func IsAuth(err error) bool {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.Code == http.StatusUnauthorized || he.Code == http.StatusForbidden
+	}
+	return false
+}
+
 // Client wraps http.Client with politeness pacing, retry/backoff and
 // an optional FlareSolverr fallback for challenge pages.
 type Client struct {
@@ -120,9 +140,10 @@ func isChallenge(status int, body []byte) bool {
 		strings.Contains(s, "cf-mitigated")
 }
 
-// do runs one request with retry and backoff. It returns the
-// response with an open body on success.
-func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer string, extra http.Header) (*http.Response, error) {
+// do runs one request with retry and backoff. payload is request body
+// bytes for POST, nil for GET. It returns the response with an open
+// body on success.
+func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer string, extra http.Header, payload []byte) (*http.Response, error) {
 	var lastErr error
 	challengeWaits := 0
 	for attempt := 0; attempt <= c.retries; attempt++ {
@@ -132,7 +153,11 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 		if err := c.pace(ctx); err != nil {
 			return nil, ErrInterrupted
 		}
-		req, err := http.NewRequestWithContext(ctx, method, urlStr, nil)
+		var reqBody io.Reader
+		if payload != nil {
+			reqBody = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, urlStr, reqBody)
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +202,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 
 		case resp.StatusCode == http.StatusNotFound:
 			resp.Body.Close()
-			return nil, fmt.Errorf("not found (404): %s", urlStr)
+			return nil, &HTTPError{Code: resp.StatusCode, URL: urlStr}
 
 		case resp.StatusCode == http.StatusTooManyRequests:
 			resp.Body.Close()
@@ -195,7 +220,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 			resp.Body.Close()
 			challengeWaits++
 			if c.fsURL != "" {
-				// FlareSolverr will handle it; fail fast so callers
+				// FlareSolverr will handle it. Fail fast so callers
 				// can route through it immediately.
 				return nil, fmt.Errorf("%w: %s", ErrChallenge, urlStr)
 			}
@@ -218,7 +243,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 
 		default:
 			resp.Body.Close()
-			return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, urlStr)
+			return nil, &HTTPError{Code: resp.StatusCode, URL: urlStr}
 		}
 	}
 	return nil, lastErr
@@ -227,7 +252,7 @@ func (c *Client) do(ctx context.Context, noRedir bool, method, urlStr, referer s
 // Get fetches a page and returns the body, falling back to
 // FlareSolverr when a challenge page is detected.
 func (c *Client) Get(ctx context.Context, url, referer string) ([]byte, error) {
-	resp, err := c.do(ctx, false, http.MethodGet, url, referer, nil)
+	resp, err := c.do(ctx, false, http.MethodGet, url, referer, nil, nil)
 	if err != nil {
 		if errors.Is(err, ErrChallenge) && c.fsURL != "" {
 			c.term.Infof("solving challenge for %s via flaresolverr", ShortURL(url))
@@ -241,7 +266,7 @@ func (c *Client) Get(ctx context.Context, url, referer string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, url)
+		return nil, &HTTPError{Code: resp.StatusCode, URL: url}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 }
@@ -249,11 +274,13 @@ func (c *Client) Get(ctx context.Context, url, referer string) ([]byte, error) {
 // GetJSON fetches a JSON API endpoint with extra headers and decodes
 // into v.
 func (c *Client) GetJSON(ctx context.Context, url, referer string, extra http.Header, v any) error {
-	resp, err := c.do(ctx, false, http.MethodGet, url, referer, extra)
+	resp, err := c.do(ctx, false, http.MethodGet, url, referer, extra, nil)
 	if err != nil {
 		if errors.Is(err, ErrChallenge) && c.fsURL != "" {
+			c.term.Infof("solving challenge for %s via flaresolverr", ShortURL(url))
 			body, ferr := c.flareGet(ctx, url)
 			if ferr != nil {
+				c.term.Warnf("flaresolverr failed for %s: %v", ShortURL(url), ferr)
 				return err
 			}
 			return json.Unmarshal(body, v)
@@ -262,49 +289,44 @@ func (c *Client) GetJSON(ctx context.Context, url, referer string, extra http.He
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, url)
+		return &HTTPError{Code: resp.StatusCode, URL: url}
+	}
+	if v == nil {
+		io.Copy(io.Discard, resp.Body)
+		return nil
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(v)
 }
 
-// PostJSON sends a JSON or form POST and decodes the response.
+// PostJSON sends a JSON or form POST and decodes the response. It
+// shares the same pacing and retry behavior as GET.
 func (c *Client) PostJSON(ctx context.Context, url string, form url2.Values, jsonBody any, extra http.Header, v any) error {
-	var body io.Reader
+	var payload []byte
 	if form != nil {
-		body = strings.NewReader(form.Encode())
+		payload = []byte(form.Encode())
 	} else if jsonBody != nil {
 		b, err := json.Marshal(jsonBody)
 		if err != nil {
 			return err
 		}
-		body = bytes.NewReader(b)
+		payload = b
 	}
-	if err := c.pace(ctx); err != nil {
-		return ErrInterrupted
+	if extra == nil {
+		extra = http.Header{}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", c.UA())
 	if form != nil {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		extra.Set("Content-Type", "application/x-www-form-urlencoded")
 	} else {
-		req.Header.Set("Content-Type", "application/json")
+		extra.Set("Content-Type", "application/json")
 	}
-	for k, vs := range extra {
-		for _, s := range vs {
-			req.Header.Set(k, s)
-		}
-	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.do(ctx, false, http.MethodPost, url, "", extra, payload)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("status %d: %s", resp.StatusCode, url)
+		return &HTTPError{Code: resp.StatusCode, URL: url}
 	}
 	if v == nil {
 		io.Copy(io.Discard, resp.Body)
@@ -316,7 +338,7 @@ func (c *Client) PostJSON(ctx context.Context, url string, form url2.Values, jso
 // Resolve performs a request without following redirects and returns
 // the Location target.
 func (c *Client) Resolve(ctx context.Context, url, referer string) (string, error) {
-	resp, err := c.do(ctx, true, http.MethodGet, url, referer, nil)
+	resp, err := c.do(ctx, true, http.MethodGet, url, referer, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -335,12 +357,9 @@ func (c *Client) Resolve(ctx context.Context, url, referer string) (string, erro
 
 // Open starts a download. extra carries headers such as Range.
 func (c *Client) Open(ctx context.Context, url, referer string, extra http.Header) (*http.Response, error) {
-	return c.do(ctx, false, http.MethodGet, url, referer, extra)
+	return c.do(ctx, false, http.MethodGet, url, referer, extra, nil)
 }
 
-// Headers returns the last observed rate limit headers for sources
-// that expose them (nexus X-RL-*, modrinth X-Ratelimit-*). Currently
-// informational only.
 func backoff(attempt int, base time.Duration) time.Duration {
 	if base == 0 {
 		base = 750 * time.Millisecond

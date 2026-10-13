@@ -13,9 +13,9 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const modrinthAPI = "https://api.modrinth.com/v2"
+var modrinthAPI = "https://api.modrinth.com/v2"
 
-// Modrinth uses the public v2 REST API. No auth needed; a descriptive
+// Modrinth uses the public v2 REST API. No auth needed. A descriptive
 // User-Agent is required by their API policy.
 type Modrinth struct{}
 

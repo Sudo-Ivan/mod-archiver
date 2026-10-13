@@ -13,7 +13,7 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const gbAPI = "https://gamebanana.com/apiv11"
+var gbAPI = "https://gamebanana.com/apiv11"
 
 // gbProps is the CSV property list we ask the API for. Requesting an
 // unknown property makes the whole call 400, so keep this minimal.

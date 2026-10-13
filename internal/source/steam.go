@@ -128,7 +128,7 @@ type collResp struct {
 	} `json:"response"`
 }
 
-const steamAPI = "https://api.steampowered.com/ISteamRemoteStorage"
+var steamAPI = "https://api.steampowered.com/ISteamRemoteStorage"
 
 func getPublished(ctx context.Context, c *core.Client, ids []string) ([]publishedFile, error) {
 	form := url.Values{}

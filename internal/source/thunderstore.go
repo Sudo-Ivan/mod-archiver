@@ -11,7 +11,7 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const tsAPI = "https://thunderstore.io/api/experimental"
+var tsAPI = "https://thunderstore.io/api/experimental"
 
 // Thunderstore uses the public experimental API. Community and search
 // endpoints are behind Cloudflare, so we stick to the ungated

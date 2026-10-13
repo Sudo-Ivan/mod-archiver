@@ -15,7 +15,7 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const modioAPI = "https://api.mod.io/v1"
+var modioAPI = "https://api.mod.io/v1"
 
 // ModIO uses api.mod.io which requires a free api key from
 // mod.io/me/access (env MODIO_API_KEY or -modio-key). Downloads are
@@ -274,7 +274,7 @@ func (ModIO) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 	for _, f := range files {
 		dlByID[f.ID] = f.Download.BinaryURL
 	}
-	// binary urls expire; resolve lazily at download time
+	// binary urls expire, resolve lazily at download time
 	gidS := strconv.FormatInt(gid, 10)
 	modID := mod.ID
 	modioResolve := func(rctx context.Context, fid int64) (string, error) {

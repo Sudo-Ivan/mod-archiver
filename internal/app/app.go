@@ -38,6 +38,8 @@ type options struct {
 	retries   int
 	ua        string
 	fresh     bool
+	dryRun    bool
+	limit     int
 	color     string
 	quiet     bool
 	verbose   bool
@@ -82,6 +84,8 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, error) {
 	fs.IntVar(&o.retries, "retries", 4, "retries per request")
 	fs.StringVar(&o.ua, "ua", defaultUA, "User-Agent header for page requests")
 	fs.BoolVar(&o.fresh, "fresh", false, "ignore previous manifest, download everything again")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "list what would be downloaded, fetch nothing")
+	fs.IntVar(&o.limit, "limit", 0, "cap number of files downloaded per target (0 = all)")
 	fs.StringVar(&o.color, "color", "auto", "color output: auto, always, never")
 	fs.BoolVar(&o.quiet, "q", false, "only warnings and errors")
 	fs.BoolVar(&o.verbose, "v", false, "verbose debug output")
@@ -188,7 +192,7 @@ flags:`)
 	return o, targets, nil
 }
 
-// probeFlareSolverr checks that the endpoint is up; returns false when
+// probeFlareSolverr checks that the endpoint is up, returns false when
 // it is not reachable so challenge handling falls back to backoff.
 func probeFlareSolverr(u string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -321,16 +325,42 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 	tasks, err := src.Collect(ctx, cc)
 	if err != nil {
 		manifest.Save()
+		if he := core.IsAuth(err); he {
+			return fmt.Errorf("%v (check your api key or login credentials)", err)
+		}
 		return err
+	}
+	if o.dryRun {
+		var total int64
+		bySection := map[string]int{}
+		for _, t := range tasks {
+			total += t.Size
+			bySection[t.Section]++
+			term.Infof("%-7s %-40s %s", t.Section, t.Title, core.HumanBytes(t.Size))
+		}
+		parts := []string{}
+		for sec, n := range bySection {
+			parts = append(parts, fmt.Sprintf("%d %s", n, sec))
+		}
+		term.Okf("%s: %s, %s total (dry run, nothing downloaded)", name, strings.Join(parts, ", "), core.HumanBytes(total))
+		manifest.Save()
+		return nil
 	}
 	if len(tasks) == 0 {
 		term.Okf("%s: nothing to download, archive is complete", name)
 		manifest.Save()
 		return nil
 	}
-	term.Infof("%s: %d item(s) to fetch with %d worker(s)", name, len(tasks), o.jobs)
+	if o.limit > 0 {
+		tasks = limitTasks(tasks, o.limit)
+	}
+	est := int64(0)
+	for _, t := range tasks {
+		est += t.Size
+	}
+	term.Infof("%s: %d item(s) to fetch (%s known size) with %d worker(s)", name, len(tasks), core.HumanBytes(est), o.jobs)
 
-	runPool(ctx, c, term, o, manifest, dir, tasks)
+	stats := runPool(ctx, c, term, o, manifest, dir, tasks)
 
 	manifest.Save()
 	done, failedN, pending := manifest.Counts()
@@ -342,17 +372,53 @@ func archiveTarget(ctx context.Context, c *core.Client, term *core.Term, o *opti
 		term.Warnf("%s: done=%d failed=%d pending=%d", name, done, failedN, pending)
 		return fmt.Errorf("%d item(s) failed", failedN)
 	default:
-		term.Okf("%s: complete, %d item(s) archived", name, done)
+		term.Okf("%s: complete, %d item(s) archived, %s fetched in %s", name, done, core.HumanBytes(stats.bytes), core.HumanDur(stats.took))
 		return nil
 	}
 }
 
-// runPool feeds tasks to workers, each rendering progress on its own
-// status line.
-func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m *core.Manifest, dir string, tasks []*core.Task) {
-	term.Reserve(o.jobs)
-	defer term.Release()
+// limitTasks keeps at most n file tasks plus all non-file tasks.
+func limitTasks(tasks []*core.Task, n int) []*core.Task {
+	files := 0
+	out := tasks[:0]
+	for _, t := range tasks {
+		if t.Section == "files" {
+			if files >= n {
+				continue
+			}
+			files++
+		}
+		out = append(out, t)
+	}
+	return out
+}
 
+type poolStats struct {
+	bytes int64
+	took  time.Duration
+}
+
+// runPool feeds tasks to workers, each rendering progress on its own
+// status line. One extra line tracks overall run progress.
+func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m *core.Manifest, dir string, tasks []*core.Task) poolStats {
+	term.Reserve(o.jobs + 1)
+	defer term.Release()
+	overall := o.jobs
+
+	var doneN, doneBytes int64
+	var mu sync.Mutex
+	render := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		frac := float64(doneN) / float64(len(tasks))
+		term.Set(overall, fmt.Sprintf("%s overall %d/%d items %s %s",
+			term.Dim("=="),
+			doneN, len(tasks),
+			core.RenderBar(14, frac),
+			core.HumanBytes(doneBytes)))
+	}
+
+	start := time.Now()
 	queue := make(chan *core.Task)
 	var wg sync.WaitGroup
 	for slot := 0; slot < o.jobs; slot++ {
@@ -364,7 +430,7 @@ func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m
 					term.Errf("mkdir %s: %v", t.DestDir, err)
 					continue
 				}
-				start := time.Now()
+				taskStart := time.Now()
 				var base int64 = -1
 				last := time.Time{}
 				prog := func(done, total int64) {
@@ -375,18 +441,25 @@ func runPool(ctx context.Context, c *core.Client, term *core.Term, o *options, m
 					last = now
 					if base < 0 {
 						base = done
-						start = now
+						taskStart = now
 					}
 					var frac float64
 					if total > 0 {
 						frac = float64(done) / float64(total)
 					}
-					rate := float64(done-base) / max(now.Sub(start).Seconds(), 0.1)
+					rate := float64(done-base) / max(now.Sub(taskStart).Seconds(), 0.1)
 					term.Set(slot, term.ProgressLine(t.Title, frac, done, rate, total))
 				}
 				res, err := core.FetchTask(ctx, c, t, o.hashMode, prog)
 				term.Set(slot, "")
-				applyResult(term, m, dir, t, res, err, time.Since(start))
+				applyResult(term, m, dir, t, res, err, time.Since(taskStart))
+				mu.Lock()
+				doneN++
+				if res != nil {
+					doneBytes += res.Size
+				}
+				mu.Unlock()
+				render()
 				m.Save()
 			}
 		}(slot)
@@ -402,6 +475,8 @@ feed:
 	}
 	close(queue)
 	wg.Wait()
+	term.Set(overall, "")
+	return poolStats{bytes: doneBytes, took: time.Since(start)}
 }
 
 func applyResult(term *core.Term, m *core.Manifest, dir string, t *core.Task, res *core.Result, err error, took time.Duration) {
@@ -414,8 +489,11 @@ func applyResult(term *core.Term, m *core.Manifest, dir string, t *core.Task, re
 	switch {
 	case errors.Is(err, core.ErrInterrupted):
 		term.Debugf("paused: %s", t.Title)
-	case err != nil:
+	case err != nil || res == nil:
 		e.Status = core.StFailed
+		if err == nil {
+			err = fmt.Errorf("no result")
+		}
 		e.Error = err.Error()
 		term.Errf("failed: %s: %v", t.Title, err)
 	case res.Skipped:

@@ -15,7 +15,7 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const moddbBase = "https://www.moddb.com"
+var moddbBase = "https://www.moddb.com"
 
 // ModDB scrapes moddb.com mod pages: profile, downloads list, file
 // detail pages (which carry the MD5), then resolves downloads through

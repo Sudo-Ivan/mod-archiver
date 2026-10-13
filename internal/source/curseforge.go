@@ -14,8 +14,8 @@ import (
 	"mod-archiver/internal/core"
 )
 
-const cfAPI = "https://api.curseforge.com/v1"
-const cfCDN = "https://edge.forgecdn.net"
+var cfAPI = "https://api.curseforge.com/v1"
+var cfCDN = "https://edge.forgecdn.net"
 
 // Circulated public key from the official client. Overridden by
 // -cf-key or CURSEFORGE_API_KEY; a personal key is strongly
