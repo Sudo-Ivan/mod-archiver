@@ -4,6 +4,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -315,6 +316,129 @@ func dirSize(dir string) (int64, error) {
 		return err
 	})
 	return n, err
+}
+
+type wsResult struct {
+	PublishedFileID  string `json:"publishedfileid"`
+	Title            string `json:"title"`
+	ShortDescription string `json:"short_description"`
+	ConsumerAppID    uint32 `json:"consumer_appid"`
+	FileSize         string `json:"file_size"`
+	Subscriptions    int64  `json:"subscriptions"`
+	VotesUp          int64  `json:"votes_up"`
+}
+
+// steamSearch parses the workshop browse page. Results live inside an
+// escaped JSON blob in the page hydration state.
+func steamSearchPage(body []byte, appid string, limit int) []SearchResult {
+	raw := string(body)
+	idx := strings.Index(raw, `\"results\":[`)
+	if idx < 0 {
+		return nil
+	}
+	arr := steamExtractEscaped(raw, idx+len(`\"results\":`))
+	if arr == "" {
+		return nil
+	}
+	var results []wsResult
+	if err := json.Unmarshal([]byte(arr), &results); err != nil {
+		return nil
+	}
+	var out []SearchResult
+	for _, r := range results {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		app := appid
+		if r.ConsumerAppID > 0 {
+			app = strconv.FormatUint(uint64(r.ConsumerAppID), 10)
+		}
+		out = append(out, SearchResult{
+			Source: "steam", Ref: "steam:" + app + ":" + r.PublishedFileID,
+			Title: r.Title, Game: "appid " + app,
+			Downloads: r.Subscriptions,
+			URL:       "https://steamcommunity.com/sharedfiles/filedetails/?id=" + r.PublishedFileID,
+			Summary:   r.ShortDescription,
+		})
+	}
+	return out
+}
+
+// steamExtractEscaped walks the hydration blob at raw[i:] which is a
+// JSON array embedded one escape level deep. Outer backslash pairs are
+// decoded while tracking inner string state so a quote inside a value
+// does not end the scan early. Returns the inner JSON array text.
+func steamExtractEscaped(raw string, i int) string {
+	var b strings.Builder
+	depth, inStr, innerEsc := 0, false, false
+	emit := func(c byte) bool {
+		if inStr {
+			if innerEsc {
+				innerEsc = false
+			} else if c == '"' {
+				inStr = false
+			} else if c == '\\' {
+				innerEsc = true
+			}
+		} else {
+			switch c {
+			case '"':
+				inStr = true
+			case '[', '{':
+				depth++
+			case ']', '}':
+				depth--
+			}
+		}
+		b.WriteByte(c)
+		return depth == 0
+	}
+	for i < len(raw) {
+		c := raw[i]
+		if c != '\\' || i+1 >= len(raw) {
+			i++
+			if emit(c) {
+				return b.String()
+			}
+			continue
+		}
+		d := raw[i+1]
+		switch {
+		case d == '"' || d == '\\' || d == '/':
+			// decoded char keeps inner JSON string semantics
+			i += 2
+			if emit(d) {
+				return b.String()
+			}
+		case d == 'u' && i+5 < len(raw):
+			// keep the escape for the inner JSON decoder
+			for j := i; j < i+6; j++ {
+				b.WriteByte(raw[j])
+			}
+			i += 6
+		default:
+			// n t r b f and friends: copy the pair verbatim so the
+			// inner decoder sees a valid escape
+			i += 2
+			b.WriteByte('\\')
+			b.WriteByte(d)
+		}
+	}
+	return ""
+}
+
+// Search scrapes the workshop browse page. Needs -game <appid>.
+func (Steam) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	if sc.Opts.GameHint == "" {
+		return nil, fmt.Errorf("steam search needs an appid, pass -game <appid>")
+	}
+	u := fmt.Sprintf("https://steamcommunity.com/workshop/browse/?appid=%s&searchtext=%s&browsesort=textsearch",
+		urlQueryEscape(sc.Opts.GameHint), urlQueryEscape(sc.Query))
+	body, err := sc.Client.Get(ctx, u, "https://steamcommunity.com/")
+	if err != nil {
+		return nil, err
+	}
+	return steamSearchPage(body, sc.Opts.GameHint, sc.Limit), nil
 }
 
 func (Steam) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {

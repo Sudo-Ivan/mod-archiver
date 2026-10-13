@@ -137,6 +137,47 @@ func forgecdnURL(fileID int64, fileName string) string {
 	return fmt.Sprintf("%s/files/%d/%d/%s", cfCDN, fileID/1000, fileID%1000, url2.PathEscape(fileName))
 }
 
+// Search hits the v1 mods search endpoint. Needs an api key and a
+// game hint (-game minecraft or a numeric game id).
+func (CurseForge) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	key := sc.Opts.CFKey
+	if key == "" {
+		key = cfDefaultKey
+	}
+	if sc.Opts.GameHint == "" {
+		return nil, fmt.Errorf("curseforge search needs a game, pass -game <slug or id>")
+	}
+	gid, err := cfGameID(ctx, sc.Client, key, sc.Opts.GameHint)
+	if err != nil {
+		return nil, err
+	}
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	var r cfResp[[]cfMod]
+	u := fmt.Sprintf("%s/mods/search?gameId=%d&searchFilter=%s&sortField=2&sortOrder=desc&pageSize=%d",
+		cfAPI, gid, urlQueryEscape(sc.Query), limit)
+	if err := sc.Client.GetJSON(ctx, u, "https://www.curseforge.com/", cfHeaders(key), &r); err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, 0, len(r.Data))
+	for _, d := range r.Data {
+		author := ""
+		if len(d.Authors) > 0 {
+			author = d.Authors[0].Name
+		}
+		out = append(out, SearchResult{
+			Source: "curseforge", Ref: "cf:" + sc.Opts.GameHint + ":" + d.Slug,
+			Title: d.Name, Author: author, Game: sc.Opts.GameHint,
+			Downloads: d.Downloads,
+			URL:       fmt.Sprintf("https://www.curseforge.com/mods/%d", d.ID),
+			Summary:   d.Summary,
+		})
+	}
+	return out, nil
+}
+
 func (CurseForge) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {
 	key := cc.Opts.CFKey
 	if key == "" {

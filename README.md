@@ -13,6 +13,12 @@ CurseForge, Modrinth, Thunderstore, GameBanana, mod.io.
 
     mod-archiver [flags] <target ...>
     mod-archiver [flags] -list targets.txt
+    mod-archiver search <query> [-src x] [-game x] [-limit n]
+
+`search` queries every reachable source and prints refs you can paste
+straight back in as targets. Steam search needs `-game <appid>`,
+CurseForge needs `-game <slug>`, mod.io needs a key plus `-game`.
+GameBanana has no public search endpoint so it is skipped.
 
 A target is a site prefix or a full URL:
 

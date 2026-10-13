@@ -184,6 +184,26 @@ func HumanRate(bytesPerSec float64) string {
 	return HumanBytes(int64(bytesPerSec)) + "/s"
 }
 
+// HumanCount renders a download count like 243.6M.
+func HumanCount(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	for _, u := range []struct {
+		div int64
+		suf string
+	}{{1_000_000_000, "B"}, {1_000_000, "M"}, {1_000, "K"}} {
+		if n >= u.div {
+			v := float64(n) / float64(u.div)
+			if v < 10 {
+				return fmt.Sprintf("%.1f%s", v, u.suf)
+			}
+			return fmt.Sprintf("%.0f%s", v, u.suf)
+		}
+	}
+	return fmt.Sprintf("%d", n)
+}
+
 func HumanDur(d time.Duration) string {
 	if d < time.Second {
 		return fmt.Sprintf("%dms", d.Milliseconds())

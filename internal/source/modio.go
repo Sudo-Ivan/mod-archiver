@@ -128,6 +128,41 @@ type modioFile struct {
 	Changelog string `json:"changelog"`
 }
 
+// Search uses the _q full text filter on the mods endpoint. Needs an
+// api key and a game hint (-game <slug or id>).
+func (ModIO) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	if sc.Opts.ModioKey == "" {
+		return nil, fmt.Errorf("mod.io search needs -modio-key or MODIO_API_KEY")
+	}
+	if sc.Opts.GameHint == "" {
+		return nil, fmt.Errorf("mod.io search needs a game, pass -game <slug or id>")
+	}
+	gid, gameName, err := modioGameID(ctx, sc.Client, sc.Opts.ModioKey, sc.Opts.GameHint)
+	if err != nil {
+		return nil, err
+	}
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	var list modioList[modioMod]
+	u := fmt.Sprintf("/games/%d/mods?_q=%s&_limit=%d", gid, urlQueryEscape(sc.Query), limit)
+	if err := modioGet(ctx, sc.Client, sc.Opts.ModioKey, u, &list); err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, 0, len(list.Data))
+	for _, m := range list.Data {
+		out = append(out, SearchResult{
+			Source: "modio", Ref: "modio:" + gameName + ":" + m.NameID,
+			Title: m.Name, Author: m.Submitter.Username, Game: gameName,
+			Downloads: m.Stats.Downloads,
+			URL:       fmt.Sprintf("https://mod.io/g/%s/m/%s", gameName, m.NameID),
+			Summary:   m.Summary,
+		})
+	}
+	return out, nil
+}
+
 // modioGet unwraps the list envelope or plain object response.
 func modioGet[T any](ctx context.Context, c *core.Client, key, path string, out *T) error {
 	return c.GetJSON(ctx, modioAPI+path, "https://mod.io/", modioHeaders(key), out)

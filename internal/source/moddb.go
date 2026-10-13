@@ -171,6 +171,64 @@ func (ModDB) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) 
 	}), nil
 }
 
+var reSearchMod = regexp.MustCompile(`href="(/mods/[a-zA-Z0-9-]+)"`)
+
+var reSearchRow = regexp.MustCompile(`(?s)<h4><a [^>]*>(.*?)</a></h4>`)
+
+var moddbNavSlugs = map[string]bool{
+	"new": true, "popular": true, "featured": true, "search": true,
+	"listing": true, "site": true,
+}
+
+// Search scrapes the site search listing. Rows reuse the rowcontent
+// markup from the downloads pages.
+func (ModDB) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	u := moddbBase + "/mods?filter=t&sort=rank&order=desc&q=" + urlQueryEscape(sc.Query)
+	body, err := sc.Client.Get(ctx, u, moddbBase+"/")
+	if err != nil {
+		return nil, err
+	}
+	s := string(body)
+	var out []SearchResult
+	seen := map[string]bool{}
+	locs := reFileRowStart.FindAllStringIndex(s, -1)
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	for i, loc := range locs {
+		end := len(s)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		chunk := s[loc[1]:end]
+		link := reSearchMod.FindStringSubmatch(chunk)
+		if link == nil {
+			continue
+		}
+		slug := strings.TrimPrefix(link[1], "/mods/")
+		if moddbNavSlugs[slug] || strings.Contains(slug, "/") || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		r := SearchResult{Source: "moddb", Ref: "moddb:" + slug,
+			URL: moddbBase + "/mods/" + slug}
+		if h := reSearchRow.FindStringSubmatch(chunk); h != nil {
+			r.Title = stripTags(h[1])
+		}
+		if g := reGameLink.FindStringSubmatch(chunk); g != nil {
+			r.Game = g[1]
+		}
+		out = append(out, r)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+var reGameLink = regexp.MustCompile(`href="/games/([a-zA-Z0-9-]+)"`)
+
 func collectModDBStubs(ctx context.Context, c *core.Client, slug string) ([]modDBFileStub, error) {
 	base := moddbBase + "/mods/" + slug + "/downloads"
 	body, err := c.Get(ctx, base, moddbBase+"/mods/"+slug)

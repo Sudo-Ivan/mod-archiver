@@ -7,6 +7,7 @@ package source
 import (
 	"context"
 	"fmt"
+	url2 "net/url"
 	"strings"
 
 	"mod-archiver/internal/core"
@@ -131,6 +132,10 @@ func saveOr(term *core.Term, m *core.Manifest) {
 	if err := m.Save(); err != nil {
 		term.Warnf("manifest save failed: %v", err)
 	}
+}
+
+func urlQueryEscape(s string) string {
+	return url2.QueryEscape(s)
 }
 
 // SplitHost extracts host and path segments from a URL-ish input.

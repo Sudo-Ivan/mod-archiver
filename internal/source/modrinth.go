@@ -104,6 +104,43 @@ func mrHeaders() http.Header {
 
 func toolVersion() string { return "1.0.0" }
 
+type mrSearchResp struct {
+	TotalHits int `json:"total_hits"`
+	Hits      []struct {
+		ProjectID   string `json:"project_id"`
+		Slug        string `json:"slug"`
+		Title       string `json:"title"`
+		Author      string `json:"author"`
+		Description string `json:"description"`
+		Downloads   int64  `json:"downloads"`
+		ProjectType string `json:"project_type"`
+	} `json:"hits"`
+}
+
+// Search wraps the public faceted search endpoint.
+func (Modrinth) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	var r mrSearchResp
+	u := fmt.Sprintf("%s/search?query=%s&limit=%d", modrinthAPI, urlQueryEscape(sc.Query), limit)
+	if err := sc.Client.GetJSON(ctx, u, "https://modrinth.com/", mrHeaders(), &r); err != nil {
+		return nil, err
+	}
+	out := make([]SearchResult, 0, len(r.Hits))
+	for _, h := range r.Hits {
+		out = append(out, SearchResult{
+			Source: "modrinth", Ref: "modrinth:" + h.Slug,
+			Title: h.Title, Author: h.Author, Game: "Minecraft",
+			Downloads: h.Downloads,
+			URL:       "https://modrinth.com/" + h.ProjectType + "/" + h.Slug,
+			Summary:   h.Description,
+		})
+	}
+	return out, nil
+}
+
 func (Modrinth) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {
 	id, err := modrinthID(cc.Input)
 	if err != nil {

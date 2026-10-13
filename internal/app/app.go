@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -110,6 +111,11 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, error) {
 usage:
   mod-archiver [flags] <target ...>
   mod-archiver [flags] -list targets.txt
+  mod-archiver search <query> [-src x] [-game x] [-limit n]
+
+search hits every reachable source and prints refs you can paste as
+targets. steam needs -game <appid>, curseforge needs -game <slug>,
+mod.io needs a key plus -game. gamebanana has no search api.
 
 <target> examples:
   moddb:funny-project               or a moddb.com/mods/... URL
@@ -192,6 +198,73 @@ flags:`)
 	return o, targets, nil
 }
 
+// runSearch queries every searchable source and prints pasteable refs.
+func runSearch(ctx context.Context, client *core.Client, term *core.Term, o *options, sopts *source.Options, words []string) error {
+	var terms []string
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case (w == "-src" || w == "--src") && i+1 < len(words):
+			o.srcHint = words[i+1]
+			i++
+		case (w == "-game" || w == "--game") && i+1 < len(words):
+			sopts.GameHint = words[i+1]
+			i++
+		case (w == "-limit" || w == "--limit") && i+1 < len(words):
+			if n, err := strconv.Atoi(words[i+1]); err == nil {
+				o.limit = n
+			}
+			i++
+		default:
+			terms = append(terms, w)
+		}
+	}
+	query := strings.Join(terms, " ")
+	if query == "" {
+		return fmt.Errorf("usage: mod-archiver search <query> [-src name] [-game x] [-limit n]")
+	}
+	sc := &source.SearchCtx{
+		Query: query, Limit: o.limit,
+		Client: client, Term: term, Opts: sopts,
+	}
+	term.Infof("searching %s across %s", term.Bold(query), scopeLabel(o.srcHint))
+	results, notes := source.SearchAll(ctx, sc, o.srcHint)
+	if len(results) == 0 {
+		for _, n := range notes {
+			term.Warnf("%s", n)
+		}
+		return fmt.Errorf("no results")
+	}
+	lastSrc := ""
+	for _, r := range results {
+		if r.Source != lastSrc {
+			term.Infof("%s", term.Bold(r.Source))
+			lastSrc = r.Source
+		}
+		line := fmt.Sprintf("  %s %-40.40s %-20.20s",
+			term.Green(fmt.Sprintf("%-40s", r.Ref)), r.Title, r.Author)
+		if r.Game != "" {
+			line += " " + term.Dim(fmt.Sprintf("%-14.14s", r.Game))
+		}
+		if r.Downloads > 0 {
+			line += " " + term.Dim(core.HumanCount(r.Downloads)+" dl")
+		}
+		term.Infof("%s", line)
+	}
+	for _, n := range notes {
+		term.Warnf("  %s", n)
+	}
+	term.Okf("paste any ref to archive it")
+	return nil
+}
+
+func scopeLabel(hint string) string {
+	if hint == "" {
+		return "all sources"
+	}
+	return hint
+}
+
 // saveOr persists the manifest, warning when the write fails.
 func saveOr(term *core.Term, m *core.Manifest) {
 	if err := m.Save(); err != nil {
@@ -271,6 +344,17 @@ func Run(args []string, stdout, stderr *os.File) int {
 		SteamcmdPath:  o.steamcmd,
 		GameHint:      o.gameHint,
 		VersionFilter: o.vFilter,
+	}
+
+	// search mode: mod-archiver search <query>. The flag parser stops
+	// at the first positional, so flags trailing the query are picked
+	// out by hand here.
+	if targets[0] == "search" {
+		if err := runSearch(ctx, client, term, o, sopts, targets[1:]); err != nil {
+			term.Errf("%v", err)
+			return 1
+		}
+		return 0
 	}
 
 	term.Infof("%s archiving %d target(s) to %s", term.Bold("mod-archiver "+toolVersion), len(targets), o.out)

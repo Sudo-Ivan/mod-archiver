@@ -80,6 +80,11 @@ type tsVersion struct {
 	IsActive      bool     `json:"is_active"`
 }
 
+type tsPkgList struct {
+	Next    *string     `json:"next"`
+	Results []tsPackage `json:"results"`
+}
+
 type tsPackage struct {
 	Namespace      string    `json:"namespace"`
 	Name           string    `json:"name"`
@@ -98,6 +103,51 @@ type tsPackage struct {
 		Community  string   `json:"community"`
 		Reviewed   string   `json:"review_status"`
 	} `json:"community_listings"`
+}
+
+// Search paginates the ungated package index and filters client side
+// since the api has no text filter. Bounded to a few pages.
+func (Thunderstore) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	needle := strings.ToLower(sc.Query)
+	var out []SearchResult
+	for page := 1; page <= 8 && len(out) < limit; page++ {
+		var pl tsPkgList
+		u := fmt.Sprintf("%s/package/?page=%d&ordering=-last_updated", tsAPI, page)
+		if err := sc.Client.GetJSON(ctx, u, "https://thunderstore.io/", nil, &pl); err != nil {
+			return out, err
+		}
+		for _, p := range pl.Results {
+			if strings.Contains(strings.ToLower(p.FullName), needle) ||
+				strings.Contains(strings.ToLower(p.Name), needle) {
+				out = append(out, SearchResult{
+					Source: "thunderstore",
+					Ref:    "ts:" + p.Namespace + ":" + p.Name,
+					Title:  p.FullName, Author: p.Owner,
+					Game:      tsCommunity(p),
+					Downloads: p.TotalDownloads,
+					URL:       p.PackageURL,
+				})
+				if len(out) >= limit {
+					break
+				}
+			}
+		}
+		if pl.Next == nil {
+			break
+		}
+	}
+	return out, nil
+}
+
+func tsCommunity(p tsPackage) string {
+	for _, cl := range p.Listings {
+		return cl.Community
+	}
+	return ""
 }
 
 func (Thunderstore) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {

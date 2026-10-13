@@ -4,6 +4,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -113,6 +114,65 @@ func nxHeaders(key string) http.Header {
 		"Application-Name":    []string{"mod-archiver"},
 		"Application-Version": []string{toolVersion()},
 	}
+}
+
+// nxGraphQL is the keyless v2 endpoint the website uses for search.
+var nxGraphQL = "https://api.nexusmods.com/v2/graphql"
+
+type nxSearchResp struct {
+	Data struct {
+		Mods struct {
+			Nodes []struct {
+				Name         string                      `json:"name"`
+				ModID        int64                       `json:"modId"`
+				Summary      string                      `json:"summary"`
+				Downloads    int64                       `json:"downloads"`
+				Endorsements int64                       `json:"endorsements"`
+				Adult        bool                        `json:"adultContent"`
+				Version      string                      `json:"version"`
+				Uploader     struct{ Name string }       `json:"uploader"`
+				Game         struct{ DomainName string } `json:"game"`
+			} `json:"nodes"`
+		} `json:"mods"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// Search uses the public v2 GraphQL endpoint. No api key needed for
+// search, only for downloads.
+func (Nexus) Search(ctx context.Context, sc *SearchCtx) ([]SearchResult, error) {
+	limit := sc.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	name := strings.ReplaceAll(sc.Query, `"`, `\"`)
+	game := ""
+	if sc.Opts.GameHint != "" {
+		game = fmt.Sprintf(`,gameDomainName:[{value:"%s"}]`, sc.Opts.GameHint)
+	}
+	q := fmt.Sprintf(`{"query":"{mods(filter:{nameStemmed:[{value:\"%s\"}]%s,op:AND},count:%d){nodes{name modId summary downloads endorsements adultContent version uploader{name} game{domainName}}}}"}`,
+		name, game, limit)
+	var r nxSearchResp
+	hdr := http.Header{"Content-Type": []string{"application/json"}, "User-Agent": []string{"mod-archiver/" + toolVersion()}}
+	if err := sc.Client.PostJSON(ctx, nxGraphQL, nil, json.RawMessage(q), hdr, &r); err != nil {
+		return nil, err
+	}
+	if len(r.Errors) > 0 {
+		return nil, fmt.Errorf("graphql: %s", r.Errors[0].Message)
+	}
+	out := make([]SearchResult, 0, len(r.Data.Mods.Nodes))
+	for _, n := range r.Data.Mods.Nodes {
+		out = append(out, SearchResult{
+			Source: "nexus", Ref: fmt.Sprintf("nexus:%s:%d", n.Game.DomainName, n.ModID),
+			Title: n.Name, Author: n.Uploader.Name, Game: n.Game.DomainName,
+			Downloads: n.Downloads,
+			URL:       fmt.Sprintf("https://www.nexusmods.com/%s/mods/%d", n.Game.DomainName, n.ModID),
+			Summary:   n.Summary,
+		})
+	}
+	return out, nil
 }
 
 func (Nexus) Collect(ctx context.Context, cc *CollectCtx) ([]*core.Task, error) {
