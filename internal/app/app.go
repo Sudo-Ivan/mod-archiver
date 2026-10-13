@@ -50,6 +50,7 @@ type options struct {
 	nxmKey    string
 	nxmExp    string
 	cfKey     string
+	modioKey  string
 	steamUser string
 	steamPass string
 	steamcmd  string
@@ -93,6 +94,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, error) {
 	fs.StringVar(&o.nxmKey, "nxm-key", "", "nexus free account: key param from an nxm:// link")
 	fs.StringVar(&o.nxmExp, "nxm-expires", "", "nexus free account: expires param from an nxm:// link")
 	fs.StringVar(&o.cfKey, "cf-key", "", "curseforge api key (env CURSEFORGE_API_KEY)")
+	fs.StringVar(&o.modioKey, "modio-key", "", "mod.io api key (env MODIO_API_KEY)")
 	fs.StringVar(&o.steamUser, "steam-user", "", "steam login user, default anonymous (env STEAM_USER)")
 	fs.StringVar(&o.steamPass, "steam-pass", "", "steam login password (env STEAM_PASS)")
 	fs.StringVar(&o.steamcmd, "steamcmd", "", "path to steamcmd binary (env STEAMCMD)")
@@ -111,6 +113,9 @@ usage:
   steam:4000:3350206986             or a steamcommunity.com sharedfiles URL (?id=)
   cf:minecraft:jei                  or a curseforge.com/<game>/<class>/<slug> URL
   modrinth:sodium                   or a modrinth.com/mod/<slug> URL
+  ts:bbepis:BepInExPack             or a thunderstore.io/c/<comm>/p/<ns>/<name>/ URL
+  gb:415035                         or a gamebanana.com/mods/<id> URL
+  modio:drg:mod-slug                or a mod.io/g/<game>/m/<mod> URL
 
 Bare slugs default to modrinth; add -src to force a source.
 
@@ -142,7 +147,7 @@ flags:`)
 	}
 	if o.srcHint != "" {
 		switch o.srcHint {
-		case "moddb", "nexus", "steam", "curseforge", "modrinth":
+		case "moddb", "nexus", "steam", "curseforge", "modrinth", "thunderstore", "gamebanana", "modio":
 		default:
 			return nil, nil, fmt.Errorf("invalid -src %q", o.srcHint)
 		}
@@ -150,6 +155,7 @@ flags:`)
 
 	o.nexusKey = envOr(o.nexusKey, "NEXUS_API_KEY")
 	o.cfKey = envOr(o.cfKey, "CURSEFORGE_API_KEY")
+	o.modioKey = envOr(o.modioKey, "MODIO_API_KEY")
 	o.steamUser = envOr(o.steamUser, "STEAM_USER")
 	o.steamPass = envOr(o.steamPass, "STEAM_PASS")
 	o.steamcmd = envOr(o.steamcmd, "STEAMCMD")
@@ -246,6 +252,7 @@ func Run(args []string, stdout, stderr *os.File) int {
 		NexusNXMKey:   o.nxmKey,
 		NexusNXMExp:   o.nxmExp,
 		CFKey:         o.cfKey,
+		ModioKey:      o.modioKey,
 		SteamUser:     o.steamUser,
 		SteamPass:     o.steamPass,
 		SteamcmdPath:  o.steamcmd,

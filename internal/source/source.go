@@ -24,6 +24,7 @@ type Options struct {
 	NexusNXMKey   string // free accounts: key param from an nxm:// link
 	NexusNXMExp   string // free accounts: expires param from an nxm:// link
 	CFKey         string
+	ModioKey      string
 	SteamUser     string
 	SteamPass     string
 	SteamcmdPath  string
@@ -61,6 +62,9 @@ var sources = []Source{
 	Steam{},
 	CurseForge{},
 	Modrinth{},
+	Thunderstore{},
+	GameBanana{},
+	ModIO{},
 }
 
 // Lookup returns the source matching input, preferring an explicit
@@ -72,7 +76,7 @@ func Lookup(input, hint string) (Source, error) {
 				return s, nil
 			}
 		}
-		return nil, fmt.Errorf("unknown source %q (want moddb, nexus, steam, curseforge, modrinth)", hint)
+		return nil, fmt.Errorf("unknown source %q (want moddb, nexus, steam, curseforge, modrinth, thunderstore, gamebanana, modio)", hint)
 	}
 	for _, s := range sources {
 		if s.Match(input) {

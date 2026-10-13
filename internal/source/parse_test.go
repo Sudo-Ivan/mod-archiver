@@ -18,6 +18,12 @@ func TestSourceLookup(t *testing.T) {
 		{"https://www.curseforge.com/minecraft/mc-mods/jei", "", "curseforge"},
 		{"modrinth:sodium", "", "modrinth"},
 		{"https://modrinth.com/mod/sodium", "", "modrinth"},
+		{"ts:bbepis:BepInExPack", "", "thunderstore"},
+		{"https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/", "", "thunderstore"},
+		{"gb:415035", "", "gamebanana"},
+		{"https://gamebanana.com/mods/494986", "", "gamebanana"},
+		{"modio:drg:my-mod", "", "modio"},
+		{"https://mod.io/g/drg/m/my-mod", "", "modio"},
 		{"294100:2009463077", "", "steam"},
 		{"anything", "moddb", "moddb"},
 	}
@@ -82,6 +88,57 @@ func TestForgeCDNURL(t *testing.T) {
 	}
 }
 
+func TestTsRef(t *testing.T) {
+	ns, n, v, err := tsRef("ts:bbepis:BepInExPack")
+	if err != nil || ns != "bbepis" || n != "BepInExPack" || v != "" {
+		t.Fatalf("got %q %q %q %v", ns, n, v, err)
+	}
+	ns, n, v, err = tsRef("thunderstore:denikson:BepInExPack_Valheim:5.4.2351")
+	if err != nil || ns != "denikson" || n != "BepInExPack_Valheim" || v != "5.4.2351" {
+		t.Fatalf("pinned: got %q %q %q %v", ns, n, v, err)
+	}
+	ns, n, _, err = tsRef("https://thunderstore.io/c/riskofrain2/p/bbepis/BepInExPack/")
+	if err != nil || ns != "bbepis" || n != "BepInExPack" {
+		t.Fatalf("url: got %q %q %v", ns, n, err)
+	}
+	ns, n, _, err = tsRef("https://thunderstore.io/package/bbepis/BepInExPack")
+	if err != nil || ns != "bbepis" || n != "BepInExPack" {
+		t.Fatalf("legacy url: got %q %q %v", ns, n, err)
+	}
+	if _, _, _, err = tsRef("https://thunderstore.io/foo"); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestGbRef(t *testing.T) {
+	typ, id, err := gbRef("gb:415035")
+	if err != nil || typ != "Mod" || id != "415035" {
+		t.Fatalf("got %q %q %v", typ, id, err)
+	}
+	typ, id, err = gbRef("https://gamebanana.com/mods/494986")
+	if err != nil || typ != "Mod" || id != "494986" {
+		t.Fatalf("url: got %q %q %v", typ, id, err)
+	}
+	typ, id, err = gbRef("https://gamebanana.com/maps/1234")
+	if err != nil || typ != "Map" || id != "1234" {
+		t.Fatalf("map: got %q %q %v", typ, id, err)
+	}
+	if _, _, err = gbRef("https://gamebanana.com/weird/1234"); err == nil {
+		t.Error("expected error for unknown item type")
+	}
+}
+
+func TestModioRef(t *testing.T) {
+	g, mod, err := modioRef("modio:drg:my-mod")
+	if err != nil || g != "drg" || mod != "my-mod" {
+		t.Fatalf("got %q %q %v", g, mod, err)
+	}
+	g, mod, err = modioRef("https://mod.io/g/drg/m/my-mod")
+	if err != nil || g != "drg" || mod != "my-mod" {
+		t.Fatalf("url: got %q %q %v", g, mod, err)
+	}
+}
+
 func TestDirNames(t *testing.T) {
 	cases := []struct {
 		src  Source
@@ -93,6 +150,9 @@ func TestDirNames(t *testing.T) {
 		{Nexus{}, "nexus:skyrim:3863", "skyrim-3863"},
 		{Steam{}, "steam:294100:2009463077", "2009463077"},
 		{CurseForge{}, "https://www.curseforge.com/minecraft/mc-mods/jei", "jei"},
+		{Thunderstore{}, "ts:bbepis:BepInExPack", "bbepis-BepInExPack"},
+		{GameBanana{}, "https://gamebanana.com/mods/494986", "494986"},
+		{ModIO{}, "modio:drg:my-mod", "drg-my-mod"},
 	}
 	for _, c := range cases {
 		if got := c.src.DirName(c.in); got != c.want {

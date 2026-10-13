@@ -1,0 +1,18 @@
+[
+  {
+    "title": "[mod-archiver] E2E test Nexus Mods source",
+    "description": "mod-archiver Nexus source (internal/source/nexus.go) is implemented but never tested against the live API. Need NEXUS_API_KEY (personal key, nexusmods.com my account api access).\n\nTest: NEXUS_API_KEY=... ./bin/mod-archiver -v nexus:skyrim:3863\nVerify: metadata parse, files.json listing, download_link.json resolution, CDN download + resume, X-RL rate headers.\nAlso test free-account path: -nxm-key/-nxm-expires from an nxm:// link.",
+    "priority": "high",
+    "status": "to-do",
+    "kaneo": true,
+    "issue": false
+  },
+  {
+    "title": "[mod-archiver] E2E test mod.io source",
+    "description": "mod-archiver mod.io source (internal/source/modio.go) is implemented from docs but never tested against the live API. Need MODIO_API_KEY (free, mod.io/me/access).\n\nTest: MODIO_API_KEY=... ./bin/mod-archiver -v modio:drg:<mod-slug>\nVerify: name_id slug resolution, games endpoint, modfiles pagination, filehash md5 verification, binary_url expiry re-resolution.",
+    "priority": "high",
+    "status": "to-do",
+    "kaneo": true,
+    "issue": false
+  }
+]
