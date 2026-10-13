@@ -88,4 +88,19 @@ agent so later requests pass on their own.
   third-party distribution, respecting `allowModDistribution=false`
   in spirit by still requiring your own api key.
 
-License: 0BSD.
+## Legal note
+
+This tool downloads publicly available files the same way a browser
+does. What you do with it is your responsibility:
+
+- Follow each site's terms of service and rate limits. The default
+  request pacing exists for a reason, keep it polite.
+- Downloaded mods remain the property of their authors. Check each
+  mod's license before redistributing or reusing it.
+- Sources that need credentials (Nexus, CurseForge, mod.io, steamcmd
+  logins) expect your own account. Using someone else's key or
+  sharing yours breaks their terms.
+- This project is not affiliated with or endorsed by any of the sites
+  it reads from.
+
+License: 0BSD. See LICENSE.
